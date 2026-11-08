@@ -15,7 +15,7 @@ rustfrc has wheels for Windows (x86_64), macOS (universal2, which runs on both A
 - `ring_counts(n)` gives the number of frequencies in each ring of an n x n spectrum, as a uint64 array.
 - `FrcPlan(n)` holds the FFT plans and the buffers for n x n images. `one_frc` and `two_frc` make one per call; for several images of one size, make one plan and use its `one_frc` and `two_frc` methods.
 
-With a seed, the same input gives the same output on every CPU. Without one, every call draws a fresh seed from the operating system.
+With a seed, the same input gives the same output on every CPU and any number of threads. Without one, every call draws a fresh seed from the operating system.
 
 ```python
 import numpy as np
@@ -31,6 +31,8 @@ On 8 threads of an AMD EPYC 9V45 (Zen 5, AVX-512), with mean counts of 100 to 20
 
 - `binom_split`: its sampler takes ~1 ms on a 2000x2000 array, against ~49 ms for rustfrc 1.2.
 - `FrcPlan.one_frc`: ~18 ms on a 4096x4096 image with a reused plan, ~30 ms with `one_frc`, which makes the plan, against ~1000 ms for `frc.one_frc` 0.1 (rustfrc 1.2's split with DIPlib's FFT and `RadialSum`).
+
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) describes where the time goes, what was tried to make each step faster, and the literature behind the choices.
 
 ## Installation
 
