@@ -325,6 +325,35 @@ fn add_panel_ring_terms(
     }
 }
 
+/// Rows of a panel that the column pass copies into its column buffer at a time.
+const PANEL_COPY_ROWS: usize = 8;
+
+/// Copies a panel of `width` columns into `columns`, column c from index c stride on. It loads
+/// `PANEL_COPY_ROWS` rows and then stores them to each column at once. Storing each value right
+/// after loading it took 18 ms per 4096 x 4096 spectrum in some processes and 47 ms in others on
+/// a Ryzen 5 3400G, with the same instructions and cache misses, as if the CPU had learned to make
+/// the loads wait for the stores; in blocks it takes 11 ms in every process.
+fn panel_into_columns(data: &[Complex32], width: usize, columns: &mut [Complex32], stride: usize) {
+    let rows = data.len() / width;
+    let block_rows = rows / PANEL_COPY_ROWS * PANEL_COPY_ROWS;
+    let (blocks, rest) = data.split_at(block_rows * width);
+    for (b, block) in blocks.chunks_exact(PANEL_COPY_ROWS * width).enumerate() {
+        let y = b * PANEL_COPY_ROWS;
+        for c in 0..width {
+            let mut values = [Complex32::default(); PANEL_COPY_ROWS];
+            for (r, v) in values.iter_mut().enumerate() {
+                *v = block[r * width + c];
+            }
+            columns[c * stride + y..][..PANEL_COPY_ROWS].copy_from_slice(&values);
+        }
+    }
+    for (r, row) in rest.chunks_exact(width).enumerate() {
+        for (c, &v) in row.iter().enumerate() {
+            columns[c * stride + block_rows + r] = v;
+        }
+    }
+}
+
 /// The spectrum, split into its panels for the tasks of the column pass.
 fn split_into_panels<'a>(
     mut spectrum: &'a mut [Complex32],
@@ -581,11 +610,7 @@ impl FrcPlan {
                 },
                 |(mut columns, mut scratch, mut sums), (data, panel)| {
                     let width = panel.columns.len();
-                    for (y, row) in data.chunks_exact(width).enumerate() {
-                        for (c, &v) in row.iter().enumerate() {
-                            columns[c * stride + y] = v;
-                        }
-                    }
+                    panel_into_columns(data, width, &mut columns, stride);
                     for c in 0..width {
                         fft.process_with_scratch(
                             &mut columns[c * stride..c * stride + n],
