@@ -1,6 +1,7 @@
 //! Exact binomial (n, 0.5) sampling: the number of ones in n random bits. Sixteen xoshiro256++
 //! generators run side by side, one pixel per lane, so that every step compiles to vector code,
-//! with AVX-512 or AVX2 when the CPU has them. Every path gives the same samples.
+//! with AVX-512 when the CPU has it; the AVX2 path is written by hand. Every path gives the same
+//! samples.
 //!
 //! Every chunk of `CHUNK_LEN` counts gets its own generator, seeded from the call's seed and the
 //! chunk's index, so the samples depend on the seed alone and not on how rayon schedules the
@@ -51,7 +52,7 @@ pub enum CpuFeatures {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LanesPath {
     Portable,
-    /// Rotates as two shifts and an or, popcount as a table lookup (`vpshufb`, `vpsadbw`).
+    /// `avx2::sample_chunk`: rotates as two shifts and an or, popcount as a table lookup.
     Avx2,
     /// Native rotate (`vprolq`) and popcount (`vpopcntq`).
     Avx512,
@@ -144,51 +145,189 @@ fn binomial_lanes<const L: usize>(rng: &mut XoshiroLanes<L>, n: &[u32; L]) -> [u
     k.map(|k| k as u32)
 }
 
-/// Replaces every count of `chunk`, which must not be negative, with a sample.
+/// Replaces every count of `chunk`, which must not be negative, with the sample that `group`
+/// draws for it, `LANES` counts at a time; the last group is padded with zeros.
 #[inline(always)]
-fn sample_chunk_portable<const L: usize>(rng: &mut XoshiroLanes<L>, chunk: &mut [i32]) {
-    let (groups, tail) = chunk.as_chunks_mut::<L>();
-    for group in groups {
-        let k = binomial_lanes(rng, &group.map(|x| x as u32));
-        *group = k.map(|k| k as i32);
+fn sample_groups(chunk: &mut [i32], mut group: impl FnMut(&[u32; LANES]) -> [u32; LANES]) {
+    let (groups, tail) = chunk.as_chunks_mut::<LANES>();
+    for g in groups {
+        *g = group(&g.map(|x| x as u32)).map(|k| k as i32);
     }
     if !tail.is_empty() {
-        let mut n = [0; L];
+        let mut n = [0; LANES];
         for (n, x) in n.iter_mut().zip(tail.iter()) {
             *n = *x as u32;
         }
-        let k = binomial_lanes(rng, &n);
+        let k = group(&n);
         for (x, k) in tail.iter_mut().zip(k) {
             *x = k as i32;
         }
     }
 }
 
-/// `sample_chunk_portable` compiled for AVX2 (and `popcnt`, should LLVM keep any of it scalar).
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,popcnt")]
-fn sample_chunk_avx2<const L: usize>(rng: &mut XoshiroLanes<L>, chunk: &mut [i32]) {
-    sample_chunk_portable(rng, chunk)
+#[inline(always)]
+fn sample_chunk_portable(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
+    sample_groups(chunk, |n| binomial_lanes(rng, n))
 }
 
 /// `sample_chunk_portable` compiled for AVX-512, where `rotate_left` becomes `vprolq` and
 /// `count_ones` becomes `vpopcntq` (AVX512_VPOPCNTDQ: Ice Lake and later, Zen 4 and later).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512vpopcntdq,avx2,popcnt")]
-fn sample_chunk_avx512<const L: usize>(rng: &mut XoshiroLanes<L>, chunk: &mut [i32]) {
+fn sample_chunk_avx512(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
     sample_chunk_portable(rng, chunk)
 }
 
-fn sample_chunk<const L: usize>(path: LanesPath, rng: &mut XoshiroLanes<L>, chunk: &mut [i32]) {
+fn sample_chunk(path: LanesPath, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
     match path {
         LanesPath::Portable => sample_chunk_portable(rng, chunk),
         // SAFETY: `CpuFeatures::lanes_path` checked that the CPU has the features of each path.
         #[cfg(target_arch = "x86_64")]
-        LanesPath::Avx2 => unsafe { sample_chunk_avx2(rng, chunk) },
+        LanesPath::Avx2 => unsafe { avx2::sample_chunk(rng, chunk) },
         #[cfg(target_arch = "x86_64")]
         LanesPath::Avx512 => unsafe { sample_chunk_avx512(rng, chunk) },
         #[cfg(not(target_arch = "x86_64"))]
         _ => unreachable!("only x86-64 has vector paths"),
+    }
+}
+
+/// `sample_chunk_portable` by hand for AVX2, which LLVM compiles poorly from the portable code:
+/// the state of 16 lanes fills all 16 vector registers, so it spills on every step, and each
+/// word's popcount ends in its own `vpsadbw` and repacking. Here half the lanes at a time go
+/// through a block of groups with their state in registers. On a Ryzen 5 3400G (Zen+), which
+/// splits every 256-bit instruction in two and shifts on one unit, the split takes two thirds of
+/// the time it took with the portable code; on an Intel Core Ultra it takes as long.
+#[cfg(target_arch = "x86_64")]
+mod avx2 {
+    use std::arch::x86_64::*;
+
+    use super::{LANES, XoshiroLanes};
+
+    /// Lanes that one pass takes: two vectors of four, whose state fits in 8 registers.
+    const HALF: usize = 8;
+
+    /// Groups of `LANES` counts that the passes over the lanes go through together.
+    const BLOCK_GROUPS: usize = 256;
+
+    /// Words whose byte popcounts (at most 8 each) can be added up in a byte before `vpsadbw`.
+    const BYTE_SUM_WORDS: u32 = 31;
+
+    #[target_feature(enable = "avx2")]
+    pub(super) fn sample_chunk(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
+        let (groups, tail) = chunk.as_chunks_mut::<LANES>();
+        for block in groups.chunks_mut(BLOCK_GROUPS) {
+            sample_groups(rng, block);
+        }
+        if !tail.is_empty() {
+            let mut group = [0; LANES];
+            group[..tail.len()].copy_from_slice(tail);
+            sample_groups(rng, std::slice::from_mut(&mut group));
+            tail.copy_from_slice(&group[..tail.len()]);
+        }
+    }
+
+    /// Replaces the counts of up to `BLOCK_GROUPS` groups with samples, as `super::binomial_lanes`
+    /// does: lane i of a group takes words from generator lane i until the group's largest count
+    /// is covered.
+    #[target_feature(enable = "avx2")]
+    fn sample_groups(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+        let mut words = [0; BLOCK_GROUPS];
+        for (words, group) in words.iter_mut().zip(groups.iter()) {
+            *words = (group.iter().copied().max().unwrap_or(0) as u32).div_ceil(64);
+        }
+        for first in (0..LANES).step_by(HALF) {
+            sample_half(rng, groups, &words, first);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    fn rotate_left<const L: i32, const R: i32>(x: __m256i) -> __m256i {
+        _mm256_or_si256(_mm256_slli_epi64::<L>(x), _mm256_srli_epi64::<R>(x))
+    }
+
+    /// Samples lanes `first` .. `first + HALF` of every group.
+    #[target_feature(enable = "avx2")]
+    fn sample_half(
+        rng: &mut XoshiroLanes,
+        groups: &mut [[i32; LANES]],
+        words: &[u32; BLOCK_GROUPS],
+        first: usize,
+    ) {
+        let nibble_ones = _mm256_setr_epi8(
+            0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2,
+            3, 3, 4,
+        );
+        let low_nibbles = _mm256_set1_epi8(0x0f);
+        let (zero, all, one, word) = (
+            _mm256_setzero_si256(),
+            _mm256_set1_epi64x(-1),
+            _mm256_set1_epi64x(1),
+            _mm256_set1_epi64x(64),
+        );
+        let even_dwords_first = _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7);
+        let mut s = [[zero; 2]; 4];
+        for (w, s) in s.iter_mut().enumerate() {
+            for (v, s) in s.iter_mut().enumerate() {
+                // SAFETY: first + 4 v + 4 <= LANES, and an unaligned load reads any address.
+                *s = unsafe { _mm256_loadu_si256(rng.s[w].as_ptr().add(first + 4 * v).cast()) };
+            }
+        }
+        for (group, &words) in groups.iter_mut().zip(words) {
+            // shift[v]: 64 - (bits of the lane's count left before this word). The word's mask
+            // is all ones if that is 0 or less, else all ones shifted right by it, zero from 64.
+            let mut shift = [zero; 2];
+            for (v, shift) in shift.iter_mut().enumerate() {
+                // SAFETY: as above, for four i32s, which are not negative.
+                let counts = unsafe { _mm_loadu_si128(group.as_ptr().add(first + 4 * v).cast()) };
+                *shift = _mm256_sub_epi64(word, _mm256_cvtepu32_epi64(counts));
+            }
+            let (mut byte_sums, mut sums) = ([zero; 2], [zero; 2]);
+            for j in 0..words {
+                for v in 0..2 {
+                    let [s0, s1, s2, s3] = [s[0][v], s[1][v], s[2][v], s[3][v]];
+                    let out = _mm256_add_epi64(rotate_left::<23, 41>(_mm256_add_epi64(s0, s3)), s0);
+                    let s2 = _mm256_xor_si256(s2, s0);
+                    let s3 = _mm256_xor_si256(s3, s1);
+                    let s1 = _mm256_xor_si256(s1, s2);
+                    let s0 = _mm256_xor_si256(s0, s3);
+                    let s2 = _mm256_xor_si256(s2, _mm256_slli_epi64::<17>(s[1][v]));
+                    let s3 = rotate_left::<45, 19>(s3);
+                    [s[0][v], s[1][v], s[2][v], s[3][v]] = [s0, s1, s2, s3];
+
+                    let mask = _mm256_or_si256(
+                        _mm256_cmpgt_epi64(one, shift[v]),
+                        _mm256_srlv_epi64(all, shift[v]),
+                    );
+                    shift[v] = _mm256_add_epi64(shift[v], word);
+                    let bits = _mm256_and_si256(out, mask);
+                    let low = _mm256_and_si256(bits, low_nibbles);
+                    let high = _mm256_and_si256(_mm256_srli_epi16::<4>(bits), low_nibbles);
+                    let ones = _mm256_add_epi8(
+                        _mm256_shuffle_epi8(nibble_ones, low),
+                        _mm256_shuffle_epi8(nibble_ones, high),
+                    );
+                    byte_sums[v] = _mm256_add_epi8(byte_sums[v], ones);
+                    if j % BYTE_SUM_WORDS == BYTE_SUM_WORDS - 1 {
+                        sums[v] = _mm256_add_epi64(sums[v], _mm256_sad_epu8(byte_sums[v], zero));
+                        byte_sums[v] = zero;
+                    }
+                }
+            }
+            for v in 0..2 {
+                sums[v] = _mm256_add_epi64(sums[v], _mm256_sad_epu8(byte_sums[v], zero));
+            }
+            // The low halves of the 64-bit sums, which are below 2^31, as eight i32s in order.
+            let interleaved = _mm256_or_si256(sums[0], _mm256_slli_epi64::<32>(sums[1]));
+            let k = _mm256_permutevar8x32_epi32(interleaved, even_dwords_first);
+            // SAFETY: first + 8 <= LANES, and an unaligned store writes any address.
+            unsafe { _mm256_storeu_si256(group.as_mut_ptr().add(first).cast(), k) };
+        }
+        for (w, s) in s.iter().enumerate() {
+            for (v, &s) in s.iter().enumerate() {
+                // SAFETY: as for the loads.
+                unsafe { _mm256_storeu_si256(rng.s[w].as_mut_ptr().add(first + 4 * v).cast(), s) };
+            }
+        }
     }
 }
 
@@ -349,7 +488,16 @@ mod tests {
 
     #[test]
     fn every_path_gives_the_same_samples() {
-        let input: Vec<i32> = (0..3 * CHUNK_LEN as i32).map(|i| i % 2000).collect();
+        // Counts of up to 40 000 need 625 words, so the AVX2 path adds its byte sums many times.
+        let input: Vec<i32> = (0..3 * CHUNK_LEN as i32)
+            .map(|i| {
+                if i % 997 == 0 {
+                    40_000 - i % 300
+                } else {
+                    i % 2000
+                }
+            })
+            .collect();
         let samples: Vec<Vec<i32>> = PATHS
             .iter()
             .map(|&cpu| {
