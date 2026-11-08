@@ -172,6 +172,11 @@ fn ring_of(fy: i64, fx: i64) -> usize {
 /// A Vec of `len` zero Complex32s, from memory the system zeroes as it is first touched: `vec!`
 /// does that only for primitive types, and otherwise writes every byte at once. On Linux it also
 /// asks for 2 MiB pages, so that the first touch faults in 64 pages per 128 MiB instead of 32768.
+///
+/// It touches every page once, in parallel, before it returns. The row pass would otherwise fault
+/// the pages in as each task writes its rows into every panel, and on a Ryzen 5 3400G in a VM that
+/// made the first FRC of a plan take 60 ms longer than later ones; touching them here costs 15.
+/// On an Intel Core Ultra it costs as much as it saves.
 fn zeroed_complex_vec(len: usize) -> Vec<Complex32> {
     let floats = std::mem::ManuallyDrop::new(vec![0f32; 2 * len]);
     assert_eq!(floats.capacity(), 2 * len);
@@ -191,6 +196,15 @@ fn zeroed_complex_vec(len: usize) -> Vec<Complex32> {
             }
         }
     }
+    let first = floats.as_ptr() as usize;
+    (0..2 * len)
+        .into_par_iter()
+        .step_by(4096 / size_of::<f32>())
+        .for_each(|i| {
+            // SAFETY: i < 2 len, and the tasks write different floats. The write is volatile so
+            // that it is kept: the memory is known to be zero already, and touching it is the point.
+            unsafe { (first as *mut f32).add(i).write_volatile(0.0) };
+        });
     // SAFETY: Complex<f32> is repr(C) with two f32 fields, so it has the size of two f32s and
     // their alignment, and zero bits are 0 + 0i; the allocation is the one of 2 len f32s.
     unsafe { Vec::from_raw_parts(floats.as_ptr() as *mut Complex32, len, len) }
