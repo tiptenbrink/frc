@@ -11,6 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyMemoryView, PyTuple};
 use rayon::prelude::*;
 
+use crate::platform;
+
 /// The type of a buffer's elements, from its struct-module format and item size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Element {
@@ -68,36 +70,30 @@ impl Element {
         matches!(self, Self::F32 | Self::F64)
     }
 
-    /// The element at `p` as an integer, for an integer or bool element type.
-    ///
-    /// SAFETY: `p` points at an element of this type.
-    unsafe fn read_integer(self, p: *const u8) -> i128 {
-        unsafe {
-            match self {
-                Self::Bool => (p.read() != 0) as i128,
-                Self::I8 => p.cast::<i8>().read() as i128,
-                Self::U8 => p.read() as i128,
-                Self::I16 => p.cast::<i16>().read_unaligned() as i128,
-                Self::U16 => p.cast::<u16>().read_unaligned() as i128,
-                Self::I32 => p.cast::<i32>().read_unaligned() as i128,
-                Self::U32 => p.cast::<u32>().read_unaligned() as i128,
-                Self::I64 => p.cast::<i64>().read_unaligned() as i128,
-                Self::U64 => p.cast::<u64>().read_unaligned() as i128,
-                Self::F32 | Self::F64 => unreachable!("not an integer type"),
-            }
+    /// The element in `bytes`, which are one element of this type, as an integer, for an
+    /// integer or bool element type.
+    fn read_integer(self, bytes: &[u8]) -> i128 {
+        use bytemuck::pod_read_unaligned as read;
+        match self {
+            Self::Bool => (bytes[0] != 0) as i128,
+            Self::I8 => read::<i8>(bytes) as i128,
+            Self::U8 => bytes[0] as i128,
+            Self::I16 => read::<i16>(bytes) as i128,
+            Self::U16 => read::<u16>(bytes) as i128,
+            Self::I32 => read::<i32>(bytes) as i128,
+            Self::U32 => read::<u32>(bytes) as i128,
+            Self::I64 => read::<i64>(bytes) as i128,
+            Self::U64 => read::<u64>(bytes) as i128,
+            Self::F32 | Self::F64 => unreachable!("not an integer type"),
         }
     }
 
-    /// The element at `p` as an f32.
-    ///
-    /// SAFETY: `p` points at an element of this type.
-    unsafe fn read_f32(self, p: *const u8) -> f32 {
-        unsafe {
-            match self {
-                Self::F32 => p.cast::<f32>().read_unaligned(),
-                Self::F64 => p.cast::<f64>().read_unaligned() as f32,
-                _ => self.read_integer(p) as f32,
-            }
+    /// The element in `bytes`, which are one element of this type, as an f32.
+    fn read_f32(self, bytes: &[u8]) -> f32 {
+        match self {
+            Self::F32 => bytemuck::pod_read_unaligned::<f32>(bytes),
+            Self::F64 => bytemuck::pod_read_unaligned::<f64>(bytes) as f32,
+            _ => self.read_integer(bytes) as f32,
         }
     }
 }
@@ -123,6 +119,12 @@ impl Input {
                     .map_or_else(|_| "?".to_string(), |n| n.to_string())
             ))
         })?;
+        if buffer.suboffsets().is_some() {
+            return Err(PyTypeError::new_err(format!(
+                "{name} is an indirect buffer, with pointers to its rows, which is not supported; \
+                 copy it into a NumPy array first"
+            )));
+        }
         let element = Element::of(buffer.format(), buffer.item_size()).ok_or_else(|| {
             PyTypeError::new_err(format!(
                 "{name} has elements of format {:?}; only booleans, integers, float32 and \
@@ -155,48 +157,35 @@ impl Input {
 
     /// The elements in row-major order, as a slice of T if the buffer holds contiguous Ts at a
     /// T's alignment.
-    fn as_slice<T>(&self, element: Element) -> Option<&[T]> {
-        let p = self.buffer.buf_ptr() as *const T;
-        (self.element == element && self.buffer.is_c_contiguous() && p.is_aligned()).then(|| {
-            // SAFETY: the buffer holds item_count() contiguous Ts at p, which stay valid while
-            // the buffer is held, and p is aligned.
-            unsafe { std::slice::from_raw_parts(p, self.buffer.item_count()) }
-        })
+    fn as_slice<T: bytemuck::Pod>(&self, element: Element) -> Option<&[T]> {
+        if self.element != element || !self.buffer.is_c_contiguous() {
+            return None;
+        }
+        bytemuck::try_cast_slice(platform::buffer_memory(&self.buffer).0).ok()
     }
 
-    /// Calls `f` for each run of elements along the last axis, in row-major order, with a
-    /// pointer to its first element, its length and the byte stride between its elements.
-    fn for_each_run(&self, mut f: impl FnMut(*const u8, usize, isize)) {
+    /// Calls `f` with the offset in `platform::buffer_memory` of each element, in row-major order.
+    fn for_each_offset(&self, first: usize, mut f: impl FnMut(usize)) {
         let (shape, strides) = (self.buffer.shape(), self.buffer.strides());
-        let base = self.buffer.buf_ptr() as *const u8;
-        if shape.is_empty() {
-            return f(base, 1, 0);
-        }
         if shape.contains(&0) {
             return;
         }
-        let (outer, last) = shape.split_at(shape.len() - 1);
-        let mut index = vec![0usize; outer.len()];
+        let mut index = vec![0usize; shape.len()];
         loop {
             let offset: isize = index
                 .iter()
                 .zip(strides)
                 .map(|(&i, &s)| i as isize * s)
                 .sum();
-            // SAFETY: the offset of an index within the shape lies within the buffer.
-            f(
-                unsafe { base.offset(offset) },
-                last[0],
-                strides[shape.len() - 1],
-            );
-            let mut axis = outer.len();
+            f((first as isize + offset) as usize);
+            let mut axis = shape.len();
             loop {
                 if axis == 0 {
                     return;
                 }
                 axis -= 1;
                 index[axis] += 1;
-                if index[axis] < outer[axis] {
+                if index[axis] < shape[axis] {
                     break;
                 }
                 index[axis] = 0;
@@ -204,38 +193,31 @@ impl Input {
         }
     }
 
-    /// Converts every element with `convert` into `out`, which has one place per element, in
-    /// row-major order: in parallel for a contiguous buffer.
+    /// Converts every element with `convert`, which gets its bytes, into `out`, which has one
+    /// place per element, in row-major order: in parallel for a contiguous buffer.
     fn convert_into<T: Send>(
         &self,
         out: &mut [T],
-        convert: impl Fn(*const u8) -> PyResult<T> + Sync,
+        convert: impl Fn(&[u8]) -> PyResult<T> + Sync,
     ) -> PyResult<()> {
         let size = self.buffer.item_size();
+        let (memory, first) = platform::buffer_memory(&self.buffer);
         if self.buffer.is_c_contiguous() {
-            let base = self.buffer.buf_ptr() as usize;
             return out
-                .par_chunks_mut(1 << 14)
-                .enumerate()
-                .try_for_each(|(c, chunk)| {
-                    for (i, o) in chunk.iter_mut().enumerate() {
-                        let at = ((c << 14) + i) * size;
-                        *o = convert((base + at) as *const u8)?;
-                    }
+                .par_iter_mut()
+                .zip(memory.par_chunks_exact(size))
+                .try_for_each(|(o, bytes)| {
+                    *o = convert(bytes)?;
                     Ok(())
                 });
         }
         let mut out = out.iter_mut();
         let mut result = Ok(());
-        self.for_each_run(|p, len, stride| {
-            for i in 0..len {
-                if result.is_ok() {
-                    // SAFETY: element i of a run lies within the buffer.
-                    let at = unsafe { p.offset(i as isize * stride) };
-                    match convert(at) {
-                        Ok(v) => *out.next().expect("one place per element") = v,
-                        Err(e) => result = Err(e),
-                    }
+        self.for_each_offset(first, |at| {
+            if result.is_ok() {
+                match convert(&memory[at..at + size]) {
+                    Ok(v) => *out.next().expect("one place per element") = v,
+                    Err(e) => result = Err(e),
                 }
             }
         });
@@ -275,8 +257,7 @@ impl Input {
         }
         let element = self.element;
         let mut out = vec![0i32; self.buffer.item_count()];
-        // SAFETY: convert_into passes pointers at elements of the buffer.
-        self.convert_into(&mut out, |p| check(unsafe { element.read_integer(p) }))?;
+        self.convert_into(&mut out, |bytes| check(element.read_integer(bytes)))?;
         Ok(Cow::Owned(out))
     }
 
@@ -288,14 +269,13 @@ impl Input {
         }
         let element = self.element;
         let mut out = vec![0f32; self.buffer.item_count()];
-        // SAFETY: convert_into passes pointers at elements of the buffer.
-        self.convert_into(&mut out, |p| Ok(unsafe { element.read_f32(p) }))?;
+        self.convert_into(&mut out, |bytes| Ok(element.read_f32(bytes)))?;
         Ok(Cow::Owned(out))
     }
 }
 
 /// The struct-module format of an output element type.
-pub trait OutputElement: Copy + Default + Send {
+pub trait OutputElement: bytemuck::Pod + Default + Send {
     const FORMAT: &'static str;
 }
 
@@ -311,7 +291,7 @@ impl OutputElement for u64 {
     const FORMAT: &'static str = "Q";
 }
 
-/// A new array of `len` zero Ts in a `bytearray`, that `fill` fills while the GIL is released,
+/// A new array of zero Ts in a `bytearray`, that `fill` fills while the GIL is released,
 /// returned as a `memoryview` of `shape`. `memoryview.cast` takes no zero in a shape, so an
 /// array with no elements comes back as a 1D `memoryview` of length 0.
 pub fn new_memoryview<'py, T: OutputElement>(
@@ -320,24 +300,20 @@ pub fn new_memoryview<'py, T: OutputElement>(
     fill: impl FnOnce(&mut [T]) -> PyResult<()> + Send,
 ) -> PyResult<Bound<'py, PyAny>> {
     let len: usize = shape.iter().product();
-    let bytes = PyByteArray::new_with(py, len * size_of::<T>(), |_| Ok(()))?;
-    // SAFETY: this function holds the only reference to the new bytearray, and nothing resizes
-    // it while the slice lives.
-    let raw = unsafe { bytes.as_bytes_mut() };
-    // SAFETY: every bit pattern is a valid T for the output types.
-    let (head, values, tail) = unsafe { raw.align_to_mut::<T>() };
-    if head.is_empty() && tail.is_empty() {
-        py.detach(|| fill(values))?;
-    } else {
-        let mut values = vec![T::default(); len];
-        py.detach(|| fill(&mut values))?;
-        for (out, v) in raw.chunks_exact_mut(size_of::<T>()).zip(&values) {
-            // SAFETY: out has the size of a T, and T is plain data.
-            out.copy_from_slice(unsafe {
-                std::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>())
-            });
-        }
-    }
+    let bytes =
+        PyByteArray::new_with(
+            py,
+            len * size_of::<T>(),
+            |raw| match bytemuck::try_cast_slice_mut::<u8, T>(raw) {
+                Ok(values) => py.detach(|| fill(values)),
+                Err(_) => {
+                    let mut values = vec![T::default(); len];
+                    py.detach(|| fill(&mut values))?;
+                    raw.copy_from_slice(bytemuck::cast_slice(&values));
+                    Ok(())
+                }
+            },
+        )?;
     let view = PyMemoryView::from(&bytes)?;
     if len == 0 {
         return view.call_method1("cast", (T::FORMAT,));

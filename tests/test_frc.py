@@ -44,6 +44,19 @@ def test_strided_and_contiguous_images_give_the_same_curve():
     assert rustfrc.one_frc(big.T, seed=2) == rustfrc.one_frc(np.ascontiguousarray(big.T), seed=2)
 
 
+def test_reversed_images_read_from_before_their_first_element():
+    big = pattern_image(64, 20.0, 6)
+    for view in (big[::-1, ::-1], big[::-2, 1::2].astype(np.uint16)[::-1]):
+        assert view.strides[0] < 0
+        copy = np.ascontiguousarray(view)
+        assert rustfrc.one_frc(view, seed=3) == rustfrc.one_frc(copy, seed=3)
+        assert np.array_equal(rustfrc.binom_split(view, seed=3), rustfrc.binom_split(copy, seed=3))
+        floats = view.astype(np.float64)
+        assert rustfrc.two_frc(floats, floats[::-1]) == rustfrc.two_frc(
+            np.ascontiguousarray(floats), np.ascontiguousarray(floats[::-1])
+        )
+
+
 def test_two_frc_of_the_halves_of_a_split_sees_the_pattern():
     img = pattern_image(64, 50.0, 5)
     half = np.asarray(rustfrc.binom_split(img, seed=9))

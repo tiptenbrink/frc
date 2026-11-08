@@ -27,6 +27,7 @@ use rustfft::num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 
 use crate::binomial::{CpuFeatures, NegativeCount, Splitter};
+use crate::platform;
 
 /// The sums over one ring of the spectra F1 and F2 of the two halves.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -169,45 +170,18 @@ fn ring_of(fy: i64, fx: i64) -> usize {
     ((fy * fy + fx * fx) as f64).sqrt().floor() as usize
 }
 
-/// A Vec of `len` zero Complex32s, from memory the system zeroes as it is first touched: `vec!`
-/// does that only for primitive types, and otherwise writes every byte at once. On Linux it also
-/// asks for 2 MiB pages, so that the first touch faults in 64 pages per 128 MiB instead of 32768.
-///
-/// It touches every page once, in parallel, before it returns. The row pass would otherwise fault
-/// the pages in as each task writes its rows into every panel, and on a Ryzen 5 3400G in a VM that
-/// made the first FRC of a plan take 60 ms longer than later ones; touching them here costs 15.
-/// On an Intel Core Ultra it costs as much as it saves.
-fn zeroed_complex_vec(len: usize) -> Vec<Complex32> {
-    let floats = std::mem::ManuallyDrop::new(vec![0f32; 2 * len]);
-    assert_eq!(floats.capacity(), 2 * len);
-    #[cfg(target_os = "linux")]
-    {
-        let (start, bytes) = (floats.as_ptr() as usize, 8 * len);
-        let page_start = start.next_multiple_of(4096);
-        if page_start < start + bytes {
-            // SAFETY: the range lies within the allocation, and MADV_HUGEPAGE changes no contents;
-            // where transparent huge pages are off, it does nothing.
-            unsafe {
-                libc::madvise(
-                    page_start as *mut libc::c_void,
-                    start + bytes - page_start,
-                    libc::MADV_HUGEPAGE,
-                );
-            }
-        }
-    }
-    let first = floats.as_ptr() as usize;
-    (0..2 * len)
-        .into_par_iter()
-        .step_by(4096 / size_of::<f32>())
-        .for_each(|i| {
-            // SAFETY: i < 2 len, and the tasks write different floats. The write is volatile so
-            // that it is kept: the memory is known to be zero already, and touching it is the point.
-            unsafe { (first as *mut f32).add(i).write_volatile(0.0) };
-        });
-    // SAFETY: Complex<f32> is repr(C) with two f32 fields, so it has the size of two f32s and
-    // their alignment, and zero bits are 0 + 0i; the allocation is the one of 2 len f32s.
-    unsafe { Vec::from_raw_parts(floats.as_ptr() as *mut Complex32, len, len) }
+/// `len` zeros for the spectrum, with every page touched once, in parallel: each thread faults in
+/// its own share of the pages, in order. Leaving that to the row pass, whose tasks write their
+/// rows into every panel, made the first FRC of a plan take 60 ms longer than later ones on a
+/// Ryzen 5 3400G in a VM. Touching a page costs much less than writing its zeros, which
+/// `par_extend` would do: 24 against 18 ms for a plan at 4096 x 4096 on three of its threads.
+fn zeroed_spectrum(len: usize) -> Vec<Complex32> {
+    let mut spectrum = platform::zeroed_complex_vec(len);
+    let page = 4096 / size_of::<Complex32>();
+    spectrum
+        .par_chunks_mut(page)
+        .for_each(|page| page[0] = Complex32::default());
+    spectrum
 }
 
 /// The number of frequencies in each ring r < n / 2 of an n x n spectrum. It goes by |fy| and
@@ -243,23 +217,6 @@ fn mirrored(i: usize, n: usize) -> usize {
 /// The rows that hold the half plane fy > 0 or fy = 0: 0 ..= (n - 1) / 2.
 fn half_plane_rows(n: usize) -> usize {
     (n - 1) / 2 + 1
-}
-
-/// Copies `src` to `dst` with streaming stores where `dst` allows them: they write whole cache
-/// lines without reading them from memory first, which a normal store does. The caller fences.
-fn copy_streaming(dst: &mut [Complex32], src: &[Complex32]) {
-    assert_eq!(dst.len(), src.len());
-    #[cfg(target_arch = "x86_64")]
-    if (dst.as_ptr() as usize).is_multiple_of(16) && dst.len().is_multiple_of(2) {
-        use std::arch::x86_64::{_mm_loadu_ps, _mm_stream_ps};
-        let (d, s) = (dst.as_mut_ptr() as *mut f32, src.as_ptr() as *const f32);
-        for i in (0..2 * dst.len()).step_by(4) {
-            // SAFETY: i + 4 <= 2 len for both, d + i is 16-byte aligned, and SSE is part of x86-64.
-            unsafe { _mm_stream_ps(d.add(i), _mm_loadu_ps(s.add(i))) };
-        }
-        return;
-    }
-    dst.copy_from_slice(src)
 }
 
 /// Ring sums of the half plane, not yet doubled, in slots 0..n/2, and the origin's terms in slot
@@ -325,6 +282,22 @@ fn add_panel_ring_terms(
     }
 }
 
+/// Panels that one task of the column pass takes. A fixed number, so that the ring sums add up in
+/// the same order, and to the same last bit, on any number of threads; rayon's fold and reduce
+/// group the panels as its threads happen to steal them.
+const PANELS_PER_TASK: usize = 4;
+
+/// The sum of the ring sums of the tasks, in their order.
+fn sums_in_order(n: usize, task_sums: &[HalfPlaneSums]) -> HalfPlaneSums {
+    let mut sums = vec![[0f64; 3]; n / 2 + 1];
+    for task in task_sums {
+        for (sum, &term) in sums.iter_mut().zip(task) {
+            add_terms(sum, term);
+        }
+    }
+    sums
+}
+
 /// Rows of a panel that the column pass copies into its column buffer at a time.
 const PANEL_COPY_ROWS: usize = 8;
 
@@ -371,18 +344,29 @@ fn split_into_panels<'a>(
         .collect()
 }
 
-/// `FrcPlan::spectrum` shared by the tasks of the split, which each write their own rows of every
-/// panel only.
-#[derive(Clone, Copy)]
-struct SpectrumRows(*mut Complex32);
-// SAFETY: the tasks that share it write disjoint rows.
-unsafe impl Send for SpectrumRows {}
-unsafe impl Sync for SpectrumRows {}
-
-impl SpectrumRows {
-    fn ptr(self) -> *mut Complex32 {
-        self.0
+/// The spectrum in blocks of `rows` rows for the tasks of the row pass: block b holds rows b rows
+/// to (b + 1) rows of every panel, one run per panel, in the order of the panels.
+fn row_blocks<'a>(
+    spectrum: &'a mut [Complex32],
+    layout: &PanelLayout,
+    n: usize,
+    rows: usize,
+) -> Vec<Vec<&'a mut [Complex32]>> {
+    let mut blocks: Vec<Vec<&mut [Complex32]>> = (0..n.div_ceil(rows))
+        .map(|_| Vec::with_capacity(layout.panels.len()))
+        .collect();
+    for (data, panel) in split_into_panels(spectrum, layout, n)
+        .into_iter()
+        .zip(&layout.panels)
+    {
+        for (block, run) in blocks
+            .iter_mut()
+            .zip(data.chunks_mut(rows * panel.columns.len()))
+        {
+            block.push(run);
+        }
     }
+    blocks
 }
 
 /// What the row pass reads, for z.
@@ -415,7 +399,7 @@ impl FrcPlan {
             fft: FftPlanner::new().plan_fft_forward(n),
             layout: PanelLayout::new(n),
             ring_counts,
-            spectrum: zeroed_complex_vec(n * n),
+            spectrum: zeroed_spectrum(n * n),
         }
     }
 
@@ -489,9 +473,9 @@ impl FrcPlan {
         };
         let splitter = Splitter::new(seed, CpuFeatures::Detected);
         let (fft, layout) = (&self.fft, &self.layout);
-        let spectrum = SpectrumRows(self.spectrum.as_mut_ptr());
-        (0..n.div_ceil(rows))
+        row_blocks(&mut self.spectrum, layout, n, rows)
             .into_par_iter()
+            .enumerate()
             .map_init(
                 || {
                     (
@@ -499,24 +483,15 @@ impl FrcPlan {
                         vec![Complex32::default(); fft.get_inplace_scratch_len()],
                     )
                 },
-                |(buffer, scratch), task| {
+                |(buffer, scratch), (task, mut runs)| {
                     let y0 = task * rows;
                     let height = rows.min(n - y0);
                     let buffer = &mut buffer[..height * n];
-                    let p = spectrum.ptr();
                     let task_rows = y0 * n..(y0 + height) * n;
                     match source {
                         RowSource::Spectrum => {
-                            for panel in &layout.panels {
+                            for (run, panel) in runs.iter().zip(&layout.panels) {
                                 let width = panel.columns.len();
-                                // SAFETY: rows y0..y0 + height of a panel are one run within the
-                                // spectrum, which only this task touches.
-                                let run = unsafe {
-                                    std::slice::from_raw_parts(
-                                        p.add(panel.start + y0 * width),
-                                        height * width,
-                                    )
-                                };
                                 for (r, row) in run.chunks_exact(width).enumerate() {
                                     for &(x, c, len) in &panel.runs {
                                         buffer[r * n + x..r * n + x + len]
@@ -544,29 +519,17 @@ impl FrcPlan {
                         fft.process_with_scratch(buffer, scratch);
                     }
                     let mut row_of_panel = [Complex32::default(); 2 * PAIRS_PER_PANEL];
-                    for panel in &layout.panels {
+                    for (run, panel) in runs.iter_mut().zip(&layout.panels) {
                         let width = panel.columns.len();
-                        // SAFETY: as above.
-                        let run = unsafe {
-                            std::slice::from_raw_parts_mut(
-                                p.add(panel.start + y0 * width),
-                                height * width,
-                            )
-                        };
                         for (r, out) in run.chunks_exact_mut(width).enumerate() {
                             for &(x, c, len) in &panel.runs {
                                 row_of_panel[c..c + len]
                                     .copy_from_slice(&buffer[r * n + x..r * n + x + len]);
                             }
-                            copy_streaming(out, &row_of_panel[..width]);
+                            platform::copy_streaming(out, &row_of_panel[..width]);
                         }
                     }
-                    #[cfg(target_arch = "x86_64")]
-                    // SAFETY: SSE is part of x86-64. The fence orders the streaming stores before
-                    // whatever reads the spectrum next.
-                    unsafe {
-                        std::arch::x86_64::_mm_sfence()
-                    };
+                    platform::finish_streaming();
                     Ok(())
                 },
             )
@@ -595,58 +558,51 @@ impl FrcPlan {
         let n = self.n;
         let (fft, layout) = (&self.fft, &self.layout);
         let stride = n + COLUMN_PAD;
-        let panels = split_into_panels(&mut self.spectrum, layout, n);
-        panels
-            .into_par_iter()
-            .zip(&layout.panels)
-            .fold(
+        let mut panels = split_into_panels(&mut self.spectrum, layout, n);
+        let task_sums: Vec<HalfPlaneSums> = panels
+            .par_chunks_mut(PANELS_PER_TASK)
+            .zip(layout.panels.par_chunks(PANELS_PER_TASK))
+            .map_init(
                 || {
-                    let columns = vec![Complex32::default(); 2 * PAIRS_PER_PANEL * stride];
                     (
-                        columns,
+                        vec![Complex32::default(); 2 * PAIRS_PER_PANEL * stride],
                         vec![Complex32::default(); fft.get_inplace_scratch_len()],
-                        vec![[0f64; 3]; n / 2 + 1],
                     )
                 },
-                |(mut columns, mut scratch, mut sums), (data, panel)| {
-                    let width = panel.columns.len();
-                    panel_into_columns(data, width, &mut columns, stride);
-                    for c in 0..width {
-                        fft.process_with_scratch(
-                            &mut columns[c * stride..c * stride + n],
-                            &mut scratch,
-                        );
-                    }
-                    match step {
-                        ColumnStep::WriteBack => {
-                            for (y, row) in data.chunks_exact_mut(width).enumerate() {
-                                for (c, v) in row.iter_mut().enumerate() {
-                                    *v = columns[c * stride + y];
-                                }
-                            }
-                        }
-                        ColumnStep::RingSums => {
-                            add_panel_ring_terms(
-                                n,
-                                panel,
-                                |c, y| columns[c * stride + y],
-                                &mut sums,
+                |(columns, scratch), (data, panels)| {
+                    let mut sums = vec![[0f64; 3]; n / 2 + 1];
+                    for (data, panel) in data.iter_mut().zip(panels) {
+                        let width = panel.columns.len();
+                        panel_into_columns(data, width, columns, stride);
+                        for c in 0..width {
+                            fft.process_with_scratch(
+                                &mut columns[c * stride..c * stride + n],
+                                scratch,
                             );
                         }
+                        match step {
+                            ColumnStep::WriteBack => {
+                                for (y, row) in data.chunks_exact_mut(width).enumerate() {
+                                    for (c, v) in row.iter_mut().enumerate() {
+                                        *v = columns[c * stride + y];
+                                    }
+                                }
+                            }
+                            ColumnStep::RingSums => {
+                                add_panel_ring_terms(
+                                    n,
+                                    panel,
+                                    |c, y| columns[c * stride + y],
+                                    &mut sums,
+                                );
+                            }
+                        }
                     }
-                    (columns, scratch, sums)
+                    sums
                 },
             )
-            .map(|(_, _, sums)| sums)
-            .reduce(
-                || vec![[0f64; 3]; n / 2 + 1],
-                |mut a, b| {
-                    for (a, b) in a.iter_mut().zip(b) {
-                        add_terms(a, b);
-                    }
-                    a
-                },
-            )
+            .collect();
+        sums_in_order(n, &task_sums)
     }
 
     /// The column FFTs alone, written back to the spectrum, for checks and benchmarks.
@@ -664,26 +620,20 @@ impl FrcPlan {
     /// The ring sums of the spectrum after `fft_columns`, for checks and benchmarks.
     pub fn ring_sums(&self) -> Vec<RingSums> {
         let n = self.n;
-        let sums = split_panels_ref(&self.spectrum, &self.layout, n)
-            .into_par_iter()
-            .zip(&self.layout.panels)
-            .fold(
-                || vec![[0f64; 3]; n / 2 + 1],
-                |mut sums, (data, panel)| {
+        let panels = split_panels_ref(&self.spectrum, &self.layout, n);
+        let task_sums: Vec<HalfPlaneSums> = panels
+            .par_chunks(PANELS_PER_TASK)
+            .zip(self.layout.panels.par_chunks(PANELS_PER_TASK))
+            .map(|(data, panels)| {
+                let mut sums = vec![[0f64; 3]; n / 2 + 1];
+                for (data, panel) in data.iter().zip(panels) {
                     let width = panel.columns.len();
                     add_panel_ring_terms(n, panel, |c, y| data[y * width + c], &mut sums);
-                    sums
-                },
-            )
-            .reduce(
-                || vec![[0f64; 3]; n / 2 + 1],
-                |mut a, b| {
-                    for (a, b) in a.iter_mut().zip(b) {
-                        add_terms(a, b);
-                    }
-                    a
-                },
-            );
+                }
+                sums
+            })
+            .collect();
+        let sums = sums_in_order(n, &task_sums);
         self.full_ring_sums(&sums)
     }
 
@@ -927,6 +877,23 @@ mod tests {
             "median |FRC| of the noise rings {}",
             noise[noise.len() / 2]
         );
+    }
+
+    #[test]
+    fn every_thread_count_gives_the_same_curve() {
+        let n = 300;
+        let counts = pattern_image(n, 40.0, 11);
+        let curve = |threads: usize| {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            pool.install(|| FrcPlan::new(n).one_frc(&counts, 3).unwrap())
+        };
+        let one = curve(1);
+        for threads in [2, 3, 8] {
+            assert_eq!(curve(threads), one, "{threads} threads");
+        }
     }
 
     #[test]

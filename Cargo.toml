@@ -8,6 +8,7 @@ name = "rustfrc"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
+bytemuck = "1"
 rand = "0.10"
 rand_xoshiro = "0.8"
 rayon = "1.12.0"

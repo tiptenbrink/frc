@@ -2,6 +2,8 @@
 //! without NumPy. Functions take any array that supports the buffer protocol and return
 //! `memoryview`s.
 
+#![deny(unsafe_code)]
+
 use std::sync::Mutex;
 
 use pyo3::exceptions::PyValueError;
@@ -10,6 +12,7 @@ use pyo3::prelude::*;
 pub mod binomial;
 mod buffers;
 pub mod frc;
+mod platform;
 
 use buffers::{Input, new_memoryview};
 

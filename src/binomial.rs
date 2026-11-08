@@ -178,10 +178,13 @@ fn sample_chunk_avx512(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
     sample_chunk_portable(rng, chunk)
 }
 
+/// Samples `chunk` with the code of `path`. Calling code compiled for CPU features that the
+/// caller does not have is unsafe, and this is the only unsafe code outside `platform`.
+#[allow(unsafe_code)]
 fn sample_chunk(path: LanesPath, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
     match path {
         LanesPath::Portable => sample_chunk_portable(rng, chunk),
-        // SAFETY: `CpuFeatures::lanes_path` checked that the CPU has the features of each path.
+        // SAFETY: `CpuFeatures::lanes_path` gives a path only if the CPU has its features.
         #[cfg(target_arch = "x86_64")]
         LanesPath::Avx2 => unsafe { avx2::sample_chunk(rng, chunk) },
         #[cfg(target_arch = "x86_64")]
@@ -201,6 +204,8 @@ fn sample_chunk(path: LanesPath, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
 mod avx2 {
     use std::arch::x86_64::*;
 
+    use bytemuck::cast;
+
     use super::{LANES, XoshiroLanes};
 
     /// Lanes that one pass takes: two vectors of four, whose state fits in 8 registers.
@@ -209,7 +214,7 @@ mod avx2 {
     /// Groups of `LANES` counts that the passes over the lanes go through together.
     const BLOCK_GROUPS: usize = 256;
 
-    /// Words whose byte popcounts (at most 8 each) can be added up in a byte before `vpsadbw`.
+    /// Popcounts of words (at most 8 per byte each) that a byte can add up before `vpsadbw`.
     const BYTE_SUM_WORDS: u32 = 31;
 
     #[target_feature(enable = "avx2")]
@@ -240,9 +245,55 @@ mod avx2 {
         }
     }
 
+    /// `[f(0), f(1)]`. Compiled for AVX2, it can inline a closure that uses AVX2, which
+    /// `std::array::from_fn`, compiled without it, cannot.
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    fn pair(f: impl Fn(usize) -> __m256i) -> [__m256i; 2] {
+        [f(0), f(1)]
+    }
+
     #[target_feature(enable = "avx2")]
     fn rotate_left<const L: i32, const R: i32>(x: __m256i) -> __m256i {
         _mm256_or_si256(_mm256_slli_epi64::<L>(x), _mm256_srli_epi64::<R>(x))
+    }
+
+    /// The popcount of each byte of `x`, by a table lookup of each half byte.
+    #[target_feature(enable = "avx2")]
+    fn byte_popcounts(x: __m256i) -> __m256i {
+        let nibble_ones = _mm256_setr_epi8(
+            0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2,
+            3, 3, 4,
+        );
+        let low_nibbles = _mm256_set1_epi8(0x0f);
+        let low = _mm256_and_si256(x, low_nibbles);
+        let high = _mm256_and_si256(_mm256_srli_epi16::<4>(x), low_nibbles);
+        _mm256_add_epi8(
+            _mm256_shuffle_epi8(nibble_ones, low),
+            _mm256_shuffle_epi8(nibble_ones, high),
+        )
+    }
+
+    /// For each 64-bit lane, all ones shifted right by `shift`: all of them for 0 or less, the low
+    /// 64 - shift for 1 to 63, none from 64.
+    #[target_feature(enable = "avx2")]
+    fn ones_shifted_right(shift: __m256i) -> __m256i {
+        _mm256_or_si256(
+            _mm256_cmpgt_epi64(_mm256_set1_epi64x(1), shift),
+            _mm256_srlv_epi64(_mm256_set1_epi64x(-1), shift),
+        )
+    }
+
+    /// The first four counts of `counts`, which are not negative, as 64-bit lanes.
+    #[target_feature(enable = "avx2")]
+    fn widened(counts: &[i32]) -> __m256i {
+        let four: [i32; 4] = counts[..4].try_into().unwrap();
+        _mm256_cvtepu32_epi64(cast::<[i32; 4], __m128i>(four))
+    }
+
+    /// The first four words of `words` as a vector.
+    fn vector_of(words: &[u64]) -> __m256i {
+        cast::<[u64; 4], __m256i>(words[..4].try_into().unwrap())
     }
 
     /// Samples lanes `first` .. `first + HALF` of every group.
@@ -253,34 +304,14 @@ mod avx2 {
         words: &[u32; BLOCK_GROUPS],
         first: usize,
     ) {
-        let nibble_ones = _mm256_setr_epi8(
-            0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2,
-            3, 3, 4,
-        );
-        let low_nibbles = _mm256_set1_epi8(0x0f);
-        let (zero, all, one, word) = (
-            _mm256_setzero_si256(),
-            _mm256_set1_epi64x(-1),
-            _mm256_set1_epi64x(1),
-            _mm256_set1_epi64x(64),
-        );
-        let even_dwords_first = _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7);
-        let mut s = [[zero; 2]; 4];
-        for (w, s) in s.iter_mut().enumerate() {
-            for (v, s) in s.iter_mut().enumerate() {
-                // SAFETY: first + 4 v + 4 <= LANES, and an unaligned load reads any address.
-                *s = unsafe { _mm256_loadu_si256(rng.s[w].as_ptr().add(first + 4 * v).cast()) };
-            }
-        }
+        let (zero, word) = (_mm256_setzero_si256(), _mm256_set1_epi64x(64));
+        let at = |v: usize| first + 4 * v;
+        let mut s: [[__m256i; 2]; 4] =
+            [0, 1, 2, 3].map(|w| [vector_of(&rng.s[w][at(0)..]), vector_of(&rng.s[w][at(1)..])]);
         for (group, &words) in groups.iter_mut().zip(words) {
-            // shift[v]: 64 - (bits of the lane's count left before this word). The word's mask
-            // is all ones if that is 0 or less, else all ones shifted right by it, zero from 64.
-            let mut shift = [zero; 2];
-            for (v, shift) in shift.iter_mut().enumerate() {
-                // SAFETY: as above, for four i32s, which are not negative.
-                let counts = unsafe { _mm_loadu_si128(group.as_ptr().add(first + 4 * v).cast()) };
-                *shift = _mm256_sub_epi64(word, _mm256_cvtepu32_epi64(counts));
-            }
+            // shift[v]: 64 - (bits of the lane's count left before this word).
+            let mut shift: [__m256i; 2] =
+                pair(|v| _mm256_sub_epi64(word, widened(&group[at(v)..])));
             let (mut byte_sums, mut sums) = ([zero; 2], [zero; 2]);
             for j in 0..words {
                 for v in 0..2 {
@@ -294,19 +325,9 @@ mod avx2 {
                     let s3 = rotate_left::<45, 19>(s3);
                     [s[0][v], s[1][v], s[2][v], s[3][v]] = [s0, s1, s2, s3];
 
-                    let mask = _mm256_or_si256(
-                        _mm256_cmpgt_epi64(one, shift[v]),
-                        _mm256_srlv_epi64(all, shift[v]),
-                    );
+                    let bits = _mm256_and_si256(out, ones_shifted_right(shift[v]));
                     shift[v] = _mm256_add_epi64(shift[v], word);
-                    let bits = _mm256_and_si256(out, mask);
-                    let low = _mm256_and_si256(bits, low_nibbles);
-                    let high = _mm256_and_si256(_mm256_srli_epi16::<4>(bits), low_nibbles);
-                    let ones = _mm256_add_epi8(
-                        _mm256_shuffle_epi8(nibble_ones, low),
-                        _mm256_shuffle_epi8(nibble_ones, high),
-                    );
-                    byte_sums[v] = _mm256_add_epi8(byte_sums[v], ones);
+                    byte_sums[v] = _mm256_add_epi8(byte_sums[v], byte_popcounts(bits));
                     if j % BYTE_SUM_WORDS == BYTE_SUM_WORDS - 1 {
                         sums[v] = _mm256_add_epi64(sums[v], _mm256_sad_epu8(byte_sums[v], zero));
                         byte_sums[v] = zero;
@@ -318,14 +339,13 @@ mod avx2 {
             }
             // The low halves of the 64-bit sums, which are below 2^31, as eight i32s in order.
             let interleaved = _mm256_or_si256(sums[0], _mm256_slli_epi64::<32>(sums[1]));
-            let k = _mm256_permutevar8x32_epi32(interleaved, even_dwords_first);
-            // SAFETY: first + 8 <= LANES, and an unaligned store writes any address.
-            unsafe { _mm256_storeu_si256(group.as_mut_ptr().add(first).cast(), k) };
+            let k =
+                _mm256_permutevar8x32_epi32(interleaved, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+            group[first..first + HALF].copy_from_slice(&cast::<__m256i, [i32; 8]>(k));
         }
         for (w, s) in s.iter().enumerate() {
             for (v, &s) in s.iter().enumerate() {
-                // SAFETY: as for the loads.
-                unsafe { _mm256_storeu_si256(rng.s[w].as_mut_ptr().add(first + 4 * v).cast(), s) };
+                rng.s[w][at(v)..at(v) + 4].copy_from_slice(&cast::<__m256i, [u64; 4]>(s));
             }
         }
     }
@@ -461,6 +481,36 @@ mod tests {
                 let mut a = vec![n as i32; 100_000];
                 binom_split(&mut a, 0xF00D ^ n, cpu).unwrap();
                 assert_binomial_half(&format!("{cpu:?}"), n, &a);
+            }
+        }
+    }
+
+    /// Counts that share a lane's word, as small counts do, must still get disjoint bits: the
+    /// samples of neighbouring counts, in the same lane and in the next one, are uncorrelated.
+    #[test]
+    fn neighbouring_samples_are_uncorrelated() {
+        for cpu in PATHS {
+            for n in [1, 7, 20, 63, 64, 65, 100] {
+                let len = 400_000;
+                let mut a = vec![n; len];
+                binom_split(&mut a, 0xC0FFEE ^ n as u64, cpu).unwrap();
+                let mean = n as f64 / 2.0;
+                let variance = n as f64 / 4.0;
+                for offset in [1, LANES] {
+                    let covariance: f64 = a
+                        .iter()
+                        .zip(&a[offset..])
+                        .map(|(&x, &y)| (x as f64 - mean) * (y as f64 - mean))
+                        .sum::<f64>()
+                        / (len - offset) as f64;
+                    let correlation = covariance / variance;
+                    // Six standard deviations of the correlation of independent samples.
+                    let bound = 6.0 / ((len - offset) as f64).sqrt();
+                    assert!(
+                        correlation.abs() < bound,
+                        "{cpu:?}: n = {n}, offset {offset}: correlation {correlation:.4}"
+                    );
+                }
             }
         }
     }
