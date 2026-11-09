@@ -50,7 +50,7 @@ pub enum CpuFeatures {
 
 /// The code that the sampler runs, as `CpuFeatures` and the CPU decide it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LanesPath {
+pub(crate) enum LanesPath {
     Portable,
     /// `avx2::sample_chunk`: rotates as two shifts and an or, popcount as a table lookup.
     Avx2,
@@ -60,7 +60,7 @@ pub enum LanesPath {
 
 impl CpuFeatures {
     /// The path the sampler takes on this CPU.
-    pub fn lanes_path(self) -> LanesPath {
+    pub(crate) fn lanes_path(self) -> LanesPath {
         #[cfg(target_arch = "x86_64")]
         {
             let avx2 = self != Self::Baseline

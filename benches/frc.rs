@@ -10,8 +10,7 @@ use rand::SeedableRng;
 use rand_distr::{Distribution, Poisson};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use rayon::prelude::*;
-use rustfrc::binomial::{CpuFeatures, binom_split};
-use rustfrc::frc::FrcPlan;
+use rustfrc::{CpuFeatures, FrcPlan, binom_split};
 
 const SEED: u64 = 0x5EED;
 

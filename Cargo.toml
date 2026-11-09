@@ -1,24 +1,33 @@
-[package]
-name = "rustfrc"
+[workspace]
+members = ["rustfrc-python"]
+
+[workspace.package]
 version = "1.2.0"
 edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/tiptenbrink/rustfrc"
+authors = ["Tip ten Brink <tip@tenbrinkmeijs.com>"]
 
-[lib]
+[package]
 name = "rustfrc"
-crate-type = ["cdylib", "lib"]
+description = "An exact binomial split of images of counts, and Fourier ring correlation from one image or two."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["fourier-ring-correlation", "frc", "microscopy", "binomial", "resolution"]
+categories = ["science", "mathematics", "multimedia::images"]
+# The Python package's files and the bindings stay out of the crate.
+include = ["/src", "/benches", "/LICENSE", "/README.md", "/CHANGELOG.md"]
 
 [dependencies]
 bytemuck = "1"
-rand = "0.10"
+rand = { version = "0.10", default-features = false }
 rand_xoshiro = "0.8"
 rayon = "1.12.0"
 rustfft = "6"
-
-[dependencies.pyo3]
-version = "0.30.1"
-# One wheel per platform for CPython 3.11 and later, the first stable ABI with the buffer
-# protocol, and one for free-threaded CPython 3.15t and later; see .github/workflows/wheels.yml.
-features = ["extension-module", "abi3-py311", "abi3t-py315"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # madvise, for huge pages under the FRC spectrum.

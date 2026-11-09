@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyMemoryView, PyTuple};
 use rayon::prelude::*;
 
-use crate::platform;
+use crate::buffer_memory::buffer_memory;
 
 /// The type of a buffer's elements, from its struct-module format and item size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +99,7 @@ impl Element {
 }
 
 /// An array that a function reads, held through the buffer protocol until it is dropped.
-pub struct Input {
+pub struct InputBuffer {
     buffer: PyUntypedBuffer,
     element: Element,
     /// What the array is to the caller, for error messages: "img", "img1", ...
@@ -109,7 +109,7 @@ pub struct Input {
 /// The largest count that the split takes: counts are i32 inside.
 const MAX_COUNT: i128 = i32::MAX as i128;
 
-impl Input {
+impl InputBuffer {
     pub fn get(obj: &Bound<'_, PyAny>, name: &'static str) -> PyResult<Self> {
         let buffer = PyUntypedBuffer::get(obj).map_err(|_| {
             PyTypeError::new_err(format!(
@@ -161,10 +161,10 @@ impl Input {
         if self.element != element || !self.buffer.is_c_contiguous() {
             return None;
         }
-        bytemuck::try_cast_slice(platform::buffer_memory(&self.buffer).0).ok()
+        bytemuck::try_cast_slice(buffer_memory(&self.buffer).0).ok()
     }
 
-    /// Calls `f` with the offset in `platform::buffer_memory` of each element, in row-major order.
+    /// Calls `f` with the offset in `buffer_memory` of each element, in row-major order.
     fn for_each_offset(&self, first: usize, mut f: impl FnMut(usize)) {
         let (shape, strides) = (self.buffer.shape(), self.buffer.strides());
         if shape.contains(&0) {
@@ -201,7 +201,7 @@ impl Input {
         convert: impl Fn(&[u8]) -> PyResult<T> + Sync,
     ) -> PyResult<()> {
         let size = self.buffer.item_size();
-        let (memory, first) = platform::buffer_memory(&self.buffer);
+        let (memory, first) = buffer_memory(&self.buffer);
         if self.buffer.is_c_contiguous() {
             return out
                 .par_iter_mut()

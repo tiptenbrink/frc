@@ -28,6 +28,8 @@ dev = [
 ]
 
 [tool.maturin]
+# The bindings crate; it builds the crate rustfrc in the root of the workspace into the module.
+manifest-path = "rustfrc-python/Cargo.toml"
 python-source = "python"
 module-name = "rustfrc._internal"
 
@@ -37,4 +39,10 @@ build-backend = "maturin"
 
 [tool.uv]
 # Rebuild the extension module when the Rust code changes
-cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "src/**/*.rs" }]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "src/**/*.rs" },
+  { file = "rustfrc-python/Cargo.toml" },
+  { file = "rustfrc-python/src/**/*.rs" },
+]

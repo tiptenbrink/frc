@@ -605,12 +605,22 @@ dependencies = [
  "bytemuck",
  "criterion",
  "libc",
- "pyo3",
  "rand",
  "rand_distr",
  "rand_xoshiro",
  "rayon",
  "rustfft",
+]
+
+[[package]]
+name = "rustfrc-python"
+version = "1.2.0"
+dependencies = [
+ "bytemuck",
+ "pyo3",
+ "rand",
+ "rayon",
+ "rustfrc",
 ]
 
 [[package]]

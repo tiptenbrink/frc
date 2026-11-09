@@ -1,0 +1,25 @@
+[package]
+name = "rustfrc-python"
+description = "The Python module rustfrc._internal, over the crate rustfrc."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# maturin builds it into the Python package; crates.io gets only rustfrc.
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bytemuck = "1"
+rand = "0.10"
+rayon = "1.12.0"
+rustfrc = { path = ".." }
+
+[dependencies.pyo3]
+version = "0.30.1"
+# One wheel per platform for CPython 3.11 and later, the first stable ABI with the buffer
+# protocol, and one for free-threaded CPython 3.15t and later; see .github/workflows/wheels.yml.
+features = ["extension-module", "abi3-py311", "abi3t-py315"]

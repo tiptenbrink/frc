@@ -43,6 +43,7 @@ pub struct RingSums {
 }
 
 impl RingSums {
+    /// The FRC of the ring: correlation / sqrt(power1 power2).
     pub fn frc(&self) -> f64 {
         self.correlation / (self.power1 * self.power2).sqrt()
     }
@@ -390,7 +391,11 @@ enum ColumnStep {
 }
 
 impl FrcPlan {
-    /// A plan for images of n x n counts.
+    /// A plan for n x n images: an FFT plan and an n x n complex spectrum, 8 n² bytes.
+    ///
+    /// # Panics
+    ///
+    /// If n < 2.
     pub fn new(n: usize) -> Self {
         assert!(n >= 2, "unsupported image size {n}");
         let ring_counts = ring_counts(n);
@@ -403,17 +408,26 @@ impl FrcPlan {
         }
     }
 
+    /// The side n of the images.
     pub fn size(&self) -> usize {
         self.n
     }
 
-    /// The number of frequencies in each ring r < N / 2.
+    /// The number of frequencies in each ring r < n / 2, as [`ring_counts`] gives them.
     pub fn ring_counts(&self) -> &[u64] {
         &self.ring_counts
     }
 
     /// The FRC curve of an image of n x n counts in row-major order, split with `seed`: its value
-    /// for each ring r < N / 2. The same counts and seed give the same curve.
+    /// for each ring r < n / 2. The same counts and seed give the same curve.
+    ///
+    /// # Errors
+    ///
+    /// If a count is negative.
+    ///
+    /// # Panics
+    ///
+    /// Unless `counts` holds n² counts.
     pub fn one_frc(&mut self, counts: &[i32], seed: u64) -> Result<Vec<f64>, NegativeCount> {
         Ok(self
             .one_frc_ring_sums(counts, seed)?
@@ -432,7 +446,11 @@ impl FrcPlan {
         Ok(self.fft_columns_ring_sums())
     }
 
-    /// The FRC curve of two n x n images in row-major order: its value for each ring r < N / 2.
+    /// The FRC curve of two n x n images in row-major order: its value for each ring r < n / 2.
+    ///
+    /// # Panics
+    ///
+    /// Unless `a` and `b` hold n² values each.
     pub fn two_frc(&mut self, a: &[f32], b: &[f32]) -> Vec<f64> {
         self.two_frc_ring_sums(a, b)
             .iter()
@@ -537,16 +555,19 @@ impl FrcPlan {
     }
 
     /// The split alone, without the row FFTs: a step of `one_frc` for checks and benchmarks.
+    #[doc(hidden)]
     pub fn split(&mut self, counts: &[i32], seed: u64) -> Result<(), NegativeCount> {
         self.rows_through_buffer(RowSource::Split { counts, seed }, false)
     }
 
     /// The split and the row FFTs, a block of rows at a time while they are in cache.
+    #[doc(hidden)]
     pub fn split_fft_rows(&mut self, counts: &[i32], seed: u64) -> Result<(), NegativeCount> {
         self.rows_through_buffer(RowSource::Split { counts, seed }, true)
     }
 
     /// The row FFTs alone, of whatever the spectrum holds.
+    #[doc(hidden)]
     pub fn fft_rows(&mut self) {
         self.rows_through_buffer(RowSource::Spectrum, true)
             .expect("only a split can fail");
@@ -606,18 +627,21 @@ impl FrcPlan {
     }
 
     /// The column FFTs alone, written back to the spectrum, for checks and benchmarks.
+    #[doc(hidden)]
     pub fn fft_columns(&mut self) {
         self.columns_through_buffer(ColumnStep::WriteBack);
     }
 
     /// The column FFTs and the ring sums in one pass over the spectrum, which it leaves as the
     /// row FFTs left it.
+    #[doc(hidden)]
     pub fn fft_columns_ring_sums(&mut self) -> Vec<RingSums> {
         let sums = self.columns_through_buffer(ColumnStep::RingSums);
         self.full_ring_sums(&sums)
     }
 
     /// The ring sums of the spectrum after `fft_columns`, for checks and benchmarks.
+    #[doc(hidden)]
     pub fn ring_sums(&self) -> Vec<RingSums> {
         let n = self.n;
         let panels = split_panels_ref(&self.spectrum, &self.layout, n);
@@ -659,6 +683,7 @@ impl FrcPlan {
     }
 
     /// The spectrum, or after `split` the halves, in row-major order.
+    #[doc(hidden)]
     pub fn spectrum_row_major(&self) -> Vec<Complex32> {
         let n = self.n;
         (0..n * n)
