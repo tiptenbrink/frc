@@ -1,7 +1,0 @@
-/target
-/.idea
-/tests/.pytest_cache
-**/__pycache__/**
-**/*.pyd
-*.so
-.python-version
