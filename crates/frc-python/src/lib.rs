@@ -1,4 +1,4 @@
-//! The Python module `rustfrc._internal`: the crate rustfrc for Python without NumPy. Its
+//! The Python module `frc_core._internal`: the crate frc for Python without NumPy. Its
 //! functions take any array that supports the buffer protocol and return `memoryview`s.
 
 #![deny(unsafe_code)]
@@ -47,7 +47,7 @@ fn binom_split<'py>(
     let seed = call_seed(seed);
     new_memoryview::<i32>(py, &shape, |out| {
         out.copy_from_slice(&input.counts()?);
-        rustfrc::binom_split(out, seed, rustfrc::CpuFeatures::Detected)
+        frc::binom_split(out, seed, frc::CpuFeatures::Detected)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     })
 }
@@ -86,7 +86,7 @@ fn two_frc<'py>(
 #[pyfunction]
 fn ring_counts(py: Python<'_>, n: usize) -> PyResult<Bound<'_, PyAny>> {
     check_size(n)?;
-    let counts = rustfrc::ring_counts(n);
+    let counts = frc::ring_counts(n);
     new_memoryview::<u64>(py, &[counts.len()], |out| {
         out.copy_from_slice(&counts);
         Ok(())
@@ -105,9 +105,9 @@ fn check_size(n: usize) -> PyResult<()> {
 /// What one_frc and two_frc need for n x n images: FFT plans and an n x n spectrum, made once
 /// and reused for every image of that size. One plan computes one curve at a time; threads
 /// that share it take turns.
-#[pyclass(name = "FrcPlan", module = "rustfrc._internal", frozen)]
+#[pyclass(name = "FrcPlan", module = "frc_core._internal", frozen)]
 struct FrcPlanPy {
-    plan: Mutex<rustfrc::FrcPlan>,
+    plan: Mutex<frc::FrcPlan>,
 }
 
 impl FrcPlanPy {
@@ -137,7 +137,7 @@ impl FrcPlanPy {
     fn new(n: usize) -> PyResult<Self> {
         check_size(n)?;
         Ok(Self {
-            plan: Mutex::new(rustfrc::FrcPlan::new(n)),
+            plan: Mutex::new(frc::FrcPlan::new(n)),
         })
     }
 

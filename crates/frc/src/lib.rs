@@ -15,14 +15,14 @@
 //! number of threads.
 //!
 //! ```
-//! use rustfrc::{FrcPlan, binom_split};
+//! use frc::{FrcPlan, binom_split};
 //!
 //! let n = 64;
 //! let counts: Vec<i32> = (0..n * n).map(|i| 50 + (i % 7) as i32).collect();
 //!
 //! // One image of counts in two halves.
 //! let mut k = counts.clone();
-//! binom_split(&mut k, 7, rustfrc::CpuFeatures::Detected).unwrap();
+//! binom_split(&mut k, 7, frc::CpuFeatures::Detected).unwrap();
 //! let rest: Vec<i32> = counts.iter().zip(&k).map(|(n, k)| n - k).collect();
 //!
 //! // A plan is made once for a size and reused for every image of that size.
@@ -35,7 +35,7 @@
 //! assert_eq!(plan.two_frc(&as_f32(&k), &as_f32(&rest)), curve);
 //! ```
 //!
-//! The Python package `rustfrc` wraps this crate.
+//! The Python package `frc-core` wraps this crate, and `frc` builds a NumPy API on that.
 
 #![deny(unsafe_code)]
 

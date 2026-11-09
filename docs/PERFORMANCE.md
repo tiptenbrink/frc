@@ -1,6 +1,6 @@
 # Performance notes
 
-How `one_frc` spends its time, what was tried to make each step faster, and the literature behind the choices. The numbers come from a Ryzen 5 3400G (Zen+, AVX2, no AVX-512) in a VM with 3 cores and SMT, at 4096 x 4096 with mean counts around 100, unless a line says otherwise. Earlier work on an AMD EPYC 9V45 (Zen 5, AVX-512) is in the history of the `bench-rng` branch.
+How `one_frc` spends its time, what was tried to make each step faster, and the literature behind the choices. The numbers come from a Ryzen 5 3400G (Zen+, AVX2, no AVX-512) in a VM with 3 cores and SMT, at 4096 x 4096 with mean counts around 100, unless a line says otherwise. Earlier work on an AMD EPYC 9V45 (Zen 5, AVX-512) is in the history of the `bench-rng` branch of [rustfrc](https://github.com/tiptenbrink/rustfrc), where this code lived before it moved here.
 
 ## Where the time goes
 

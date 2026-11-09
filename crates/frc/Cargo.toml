@@ -1,0 +1,30 @@
+[package]
+name = "frc"
+description = "Fourier ring correlation of images, from two images or from one image of counts split in two by an exact binomial split."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["fourier-ring-correlation", "frc", "microscopy", "binomial", "resolution"]
+categories = ["science", "mathematics", "multimedia::images"]
+
+[dependencies]
+bytemuck = "1"
+rand = { version = "0.10", default-features = false }
+rand_xoshiro = "0.8"
+rayon = "1.12.0"
+rustfft = "6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# madvise, for huge pages under the FRC spectrum.
+libc = "0.2.191"
+
+[dev-dependencies]
+criterion = "0.8"
+rand_distr = "0.6"
+
+[[bench]]
+name = "frc"
+harness = false

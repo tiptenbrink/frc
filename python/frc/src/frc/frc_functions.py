@@ -6,7 +6,7 @@
 #                                   TU Delft
 # Tip ten Brink
 
-import rustfrc
+import frc_core
 from frc.deps_types import Img, np, Optional, Func1D, Union, Tuple
 import frc._internal_utility as _util
 import frc.utility as frc_util
@@ -39,7 +39,7 @@ def two_frc(img1: Img, img2: Img) -> np.ndarray:
         raise ValueError(
             "Images are not of exact equal dimension, or axes are not equal! Trim or pad the images first.")
 
-    return np.asarray(rustfrc.two_frc(img1, img2))
+    return np.asarray(frc_core.two_frc(img1, img2))
 
 
 def one_frc(img: Img, method: int = 1, seed: Optional[int] = None) -> np.ndarray:
@@ -76,12 +76,12 @@ def one_frc(img: Img, method: int = 1, seed: Optional[int] = None) -> np.ndarray
         img = img.astype(np.int32)
 
     if method == 1:
-        return np.asarray(rustfrc.one_frc(img, seed))
+        return np.asarray(frc_core.one_frc(img, seed))
     elif method == 2:
         seeds = (None, None) if seed is None else np.random.SeedSequence(seed).generate_state(2, np.uint64).tolist()
-        half1 = rustfrc.binom_split(img, seeds[0])
-        half2 = rustfrc.binom_split(img, seeds[1])
-        return np.asarray(rustfrc.two_frc(half1, half2))
+        half1 = frc_core.binom_split(img, seeds[0])
+        half2 = frc_core.binom_split(img, seeds[1])
+        return np.asarray(frc_core.two_frc(half1, half2))
     else:
         raise ValueError("Choose either method 1 or 2 for binomial split.")
 
@@ -103,7 +103,7 @@ def half_bit_threshold(img_size: int) -> Func1D:
     """
     # Number of pixels in a ring at distance 'array index' from the origin
     # up to a distance 'img_size'
-    nr = np.asarray(rustfrc.ring_counts(img_size * 2))[:img_size].astype(np.float64)
+    nr = np.asarray(frc_core.ring_counts(img_size * 2))[:img_size].astype(np.float64)
     nr_rt = np.sqrt(nr)
 
     # Exact calculations

@@ -1,8 +1,10 @@
-# Changelog
+# rustfrc's changelog
 
-## Unreleased
+rustfrc was the compiled core of frc, in its own repository, until its code moved here. Its last release is 1.2.0. What follows under 2.0 was never released as rustfrc: it is the first release of frc-core, under the version of frc.
 
-rustfrc 2.0 is the compiled core of frc and has no dependencies. Its functions take any array that supports the buffer protocol and return `memoryview`s instead of NumPy arrays; `numpy.asarray` wraps one without copying it.
+## 2.0 - not released
+
+rustfrc 2.0 was to be the compiled core of frc and has no dependencies. Its functions take any array that supports the buffer protocol and return `memoryview`s instead of NumPy arrays; `numpy.asarray` wraps one without copying it.
 
 ### Added
 
