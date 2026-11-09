@@ -28,7 +28,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a Rust
 
 ## Releasing
 
-Releases go through [touchgate](https://github.com/borink-org/touchgate) and publish all three packages at one version. Every pull request adds a line under `## Unreleased` in `CHANGELOG.md`. `release.yml` publishes only from the `publish` branch, with the wheels that `wheels.yml` builds. A change to either file goes on `main`, and the repository owner copies it to `publish`.
+Releases go through [touchgate](https://github.com/borink-org/touchgate) and publish all three packages at one version; [docs/RELEASING.md](docs/RELEASING.md) describes how, and the settings behind it. Every pull request adds a line under `## Unreleased` in `CHANGELOG.md`.
 
 ## License
 
