@@ -1,0 +1,48 @@
+[project]
+name = "rustfrc"
+version = "1.2.0"
+description = "The compiled core of frc: an exact binomial split and Fourier ring correlation, without dependencies."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+  {name = "Tip ten Brink", email = "tip@tenbrinkmeijs.com"},
+]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Image Processing"
+]
+# None: arrays come in through the buffer protocol and go out as memoryviews.
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/tiptenbrink/rustfrc"
+
+[dependency-groups]
+dev = [
+  "numpy >= 1.23.2",
+  "pytest >= 9.0.3",
+]
+
+[tool.maturin]
+# The bindings crate; it builds the crate rustfrc in the root of the workspace into the module.
+manifest-path = "rustfrc-python/Cargo.toml"
+python-source = "python"
+module-name = "rustfrc._internal"
+
+[build-system]
+requires = ["maturin>=1.16,<2.0"]
+build-backend = "maturin"
+
+[tool.uv]
+# Rebuild the extension module when the Rust code changes
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "src/**/*.rs" },
+  { file = "rustfrc-python/Cargo.toml" },
+  { file = "rustfrc-python/src/**/*.rs" },
+]
