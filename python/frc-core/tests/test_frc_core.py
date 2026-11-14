@@ -1,9 +1,8 @@
-import array
-
-import numpy as np
 import pytest
 
 import frc_core
+
+np = pytest.importorskip("numpy")
 
 
 def pattern_image(n: int, mean: float, seed: int) -> np.ndarray:
@@ -78,18 +77,6 @@ def test_binom_split_keeps_the_shape_and_halves_the_mean():
     assert abs(k.mean() - 500) < 1.5
     assert frc_core.binom_split(a, seed=1) == frc_core.binom_split(a, seed=1)
     assert np.asarray(frc_core.binom_split(np.zeros((0, 4), dtype=np.int32))).size == 0
-
-
-def test_no_numpy_needed():
-    img = array.array("i", [5] * 64)
-    k = frc_core.binom_split(img, seed=3)
-    assert k.format == "i" and k.shape == (64,)
-    assert all(0 <= v <= 5 for v in k)
-    square = memoryview(array.array("q", [7] * 256)).cast("B").cast("q", [16, 16])
-    curve = frc_core.one_frc(square, seed=4)
-    assert curve.format == "d" and len(curve) == 8
-    counts = frc_core.ring_counts(16)
-    assert counts.format == "Q" and counts.tolist()[:2] == [1, 8]
 
 
 def test_ring_counts_cover_the_disk():

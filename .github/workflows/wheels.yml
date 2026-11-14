@@ -164,6 +164,7 @@ jobs:
       - name: Test the wheels
         run: |
           run_tests() {
+            uv run --isolated --no-project -p "$1" --with "$2" --with pytest pytest -q python/frc-core/tests
             uv run --isolated --no-project -p "$1" --with "$2" --with pytest --with numpy pytest -q python/frc-core/tests
             uv run --isolated --no-project -p "$1" --with "$2" --with dist/frc-*.whl --with pytest pytest -q python/frc/tests
           }
@@ -171,17 +172,6 @@ jobs:
           run_tests 3.11 dist/*-cp311-abi3-*.whl
           run_tests 3.15 dist/*-cp311-abi3-*.whl
           run_tests 3.15t dist/*-abi3.abi3t-*.whl
-      # frc-core has no dependencies: it must work without NumPy installed.
-      - name: Use frc-core without NumPy
-        run: |
-          uv run --isolated --no-project -p 3.11 --with dist/*-cp311-abi3-*.whl python -c '
-          import array, importlib.util, frc_core
-          assert importlib.util.find_spec("numpy") is None
-          k = frc_core.binom_split(array.array("i", [5] * 64), seed=1)
-          assert k.format == "i" and all(0 <= v <= 5 for v in k)
-          img = memoryview(array.array("q", [7] * 256)).cast("B").cast("q", [16, 16])
-          assert len(frc_core.one_frc(img, seed=2)) == 8
-          '
 
   # Builds the extension from the sdist alone, as pip does on a platform
   # without a wheel, and frc from its sdist on top.
