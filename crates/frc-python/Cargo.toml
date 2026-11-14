@@ -6,7 +6,6 @@ edition.workspace = true
 repository.workspace = true
 authors.workspace = true
 license = "MIT OR Apache-2.0"
-license-file = "../../LICENSE"
 # maturin builds it into the Python package frc-core; crates.io gets only frc.
 publish = false
 

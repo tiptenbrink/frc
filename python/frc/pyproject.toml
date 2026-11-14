@@ -7,7 +7,7 @@ authors = [
 ]
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">=3.11"
 # Each NumPy floor is the oldest release with wheels for that Python on Linux
 # x86_64, macOS arm64 and Windows. frc-core has no dependencies, and its

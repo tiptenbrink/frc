@@ -36,4 +36,4 @@ Releases go through [touchgate](https://github.com/borink-org/touchgate) and pub
 
 ## License
 
-All three packages are licensed under MIT or Apache-2.0, at your option, as `LICENSE` says. Each package includes that file: the crate and frc-core through Cargo's `license-file`, and frc through the symlink `python/frc/LICENSE`.
+All three packages are licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. `crates/frc` and `python/frc` link to both files, and `python/frc-core`, whose wheels are also built on Windows, keeps copies of them.
