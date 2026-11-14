@@ -1,0 +1,3 @@
+# Check text files out with LF line endings on every platform, so the wheels
+# built on Windows hold the same files as the others.
+* text=auto eol=lf

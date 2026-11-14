@@ -1,0 +1,25 @@
+[package]
+name = "frc-python"
+description = "The Python module frc_core._internal, over the crate frc."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+license = "MIT OR Apache-2.0"
+# maturin builds it into the Python package frc-core; crates.io gets only frc.
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bytemuck = "1"
+frc = { path = "../frc" }
+rand = "0.10"
+rayon = "1.12.0"
+
+[dependencies.pyo3]
+version = "0.30.1"
+# One wheel per platform for CPython 3.11 and later, the first stable ABI with the buffer
+# protocol, and one for free-threaded CPython 3.15t and later; see .github/workflows/wheels.yml.
+features = ["extension-module", "abi3-py311", "abi3t-py315"]

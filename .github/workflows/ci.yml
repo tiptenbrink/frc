@@ -8,12 +8,23 @@ permissions:
   contents: read
 
 jobs:
-  buildtest:
-    name: Build-Test
+  rust:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo test --workspace --locked
+      # What a release to crates.io uploads must build on its own.
+      - run: cargo package -p frc --locked
+
+  python:
+    name: Python ${{ matrix.py-version }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
-          py-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+          py-version: ['3.11', '3.12', '3.13', '3.14', '3.15', '3.15t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -21,12 +32,16 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.py-version }}
+      # uv builds frc-core with maturin as part of installing the workspace.
       - name: uv sync
-        run: uv sync --locked
+        run: uv sync --all-packages --locked
       - name: Test lowest versions
-        if: ${{ matrix.py-version == '3.10' }}
-        run: uv pip install numpy==1.21.3 scipy==1.7.3 diplib==3.2.0 rustfrc==1.2.0
+        if: ${{ matrix.py-version == '3.11' }}
+        run: uv pip install numpy==1.23.2
       - name: Pytest
         run: uv run --no-sync pytest
-      - name: Build
-        run: uv build
+
+  wheels:
+    uses: ./.github/workflows/wheels.yml
+    permissions:
+      contents: read

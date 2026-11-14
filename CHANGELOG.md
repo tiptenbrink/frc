@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+frc now computes the FRC in Rust, and this repository releases three packages at one version: the Python library `frc`, its compiled core `frc-core` on PyPI, and the Rust crate `frc` on crates.io. frc depends only on NumPy and frc-core. frc-core takes the place of rustfrc, whose code moved here with its history.
+
+### Added
+
+- The Python package `frc-core`: the compiled core of frc, without dependencies. Its functions take any array that supports the buffer protocol, of booleans, integers or floats in native byte order, and return `memoryview`s: `binom_split(a, seed=None)`, `one_frc(img, seed=None)`, `two_frc(img1, img2)`, `ring_counts(n)` and `FrcPlan(n)`, whose `one_frc` and `two_frc` reuse its FFT plans and buffers for images of one size. It has type stubs, and wheels for CPython 3.11 and later through the stable ABI and for free-threaded CPython 3.15t and later.
+- The Rust crate `frc`, which frc-core is built from: `binom_split`, `FrcPlan` with `one_frc`, `two_frc` and their ring sums, and `ring_counts`.
+- A `seed` for `one_frc`. With a seed, the same image gives the same curve on every CPU and any number of threads; without one, every call splits with a fresh seed.
+- `utility.tukey_window(length, alpha)`, the one-dimensional window that `tukey_square` uses.
+- Support for Python 3.15 and free-threaded 3.15t.
+
+### Changed
+
+- `one_frc` and `two_frc` run in Rust: the split, the Fourier transforms and the ring sums, in two passes over memory. `one_frc` on a 4096 x 4096 image takes about 30 ms instead of about 1 s, on 8 threads of an AMD EPYC 9V45. Rings hold the same frequencies as DIPlib's `RadialSum`, which frc used before.
+- The binomial split samples binomial(n, 0.5) exactly, by counting the ones among n random bits from 16 xoshiro256++ generators at once, with AVX-512 or AVX2 when the CPU has them, chosen at run time.
+- `one_frc` truncates float images to int32 counts before the split, for both halves; earlier versions kept the fractional part in the second half.
+- `gaussf` filters with NumPy. For sigmas of 0.8 and more it gives what DIPlib gave, to within 1e-14; for smaller sigmas, DIPlib used a Fourier method instead.
+- `tukey_square` computes its window with NumPy, as SciPy did.
+- frc no longer caps the Python version.
+- frc is licensed under MIT or Apache-2.0, at your option, instead of MIT alone, as are frc-core and the crate frc.
+
+### Removed
+
+- DIPlib, SciPy and rustfrc as dependencies, and with DIPlib, DIPlib images as input: pass NumPy arrays, for example `np.asarray(dip_image)`.
+- Python 3.10 support. It has reached its end of life, and frc-core requires Python 3.11, the first stable ABI with the buffer protocol.
+
 ## 0.2.0 - 2026-11-14
 
 ### Added

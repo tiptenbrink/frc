@@ -1,99 +1,39 @@
 # frc
 
-`frc` is a Python library for calculating Fourier Ring Correlation (FRC) curves and their associated resolution.
+Fourier Ring Correlation (FRC) and resolution determination for microscopy images, from two images or from one image of counts split in two (1FRC). This repository holds three packages, released together at one version:
 
-This is particularly useful for determining the resolution of images taken with super-resolution microscopy techniques.
+| Package | Where | What it is |
+|---|---|---|
+| [`frc`](python/frc) | [PyPI](https://pypi.org/project/frc/) | The Python library: `one_frc`, `two_frc`, thresholds and resolution, on NumPy arrays. |
+| [`frc-core`](python/frc-core) | [PyPI](https://pypi.org/project/frc-core/) | The compiled core, without dependencies: arrays in through the buffer protocol, `memoryview`s out. `frc` builds on it. It replaces rustfrc. |
+| [`frc`](crates/frc) | [crates.io](https://crates.io/crates/frc) | The Rust library that both Python packages are built from. |
 
-Its most computationally intensive functions are all implemented either in NumPy or Rust, making this library quite performant.
+Most users want the first: `pip install frc`, and see [its README](python/frc/README.md).
 
-### Fourier Ring Correlation
+## Layout
 
-Introduced in 1982, Fourier Ring Correlation compares two 2D images, which are assumed to be noise-independent. In Fourier space, mage structure dominates the lower spatial frequencies (in the Fourier domain), while noise dominates at the higher frequencies.
+- `crates/frc`: the Rust library. `binomial.rs` holds the split, `frc.rs` the FRC, and `platform.rs` the crate's unsafe code.
+- `crates/frc-python`: the PyO3 bindings, built into the module `frc_core._internal`, and never published to crates.io. `buffers.rs` reads arrays through the buffer protocol and makes the `memoryview`s, and `buffer_memory.rs` holds its only unsafe code.
+- `python/frc-core`: the Python package frc-core, built with maturin from `crates/frc-python`. `frc_core/_internal.pyi` holds the module's types.
+- `python/frc`: the Python package frc, pure Python, built with uv.
 
-In Fourier space, there are rings of constant spatial frequency around the origin. By calculating the correlation between the rings in the two images (varying the spatial frequency), you can compute an FRC curve (y-axis: correlation, x-axis: spatial frequency).
+## Development
 
-At some spatial frequency, the signal cannot be separated from the noise. What spatial frequency exactly depends on what threshold function is used. The standard 0.143 and 1/2-bit thresholds are both available, as well as an algorithm to compute the intersection and resulting resolution.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a Rust toolchain. Then:
 
-For additional information about Fourier Ring Correlation, see [R.P.J. Nieuwenhuizen et al. (2013)](https://doi.org/10.1038/nmeth.2448).
+- `uv sync --all-packages` creates `.venv` with both Python packages and their development dependencies, and builds the extension. Run it again after changing the Rust code. Pass `-p 3.11` to develop against the oldest supported Python.
+- `uv run pytest` runs the tests of both Python packages.
+- `cargo test --workspace` runs the Rust tests, and `cargo bench -p frc` times the split and the FRC at several sizes.
 
-#### 1FRC
+## Releasing
 
-FRC requires two noise-independent images to work. However, modern cameras are often shot noise-limited (Poisson noise). This library includes a new method due to Bernd Rieger and Sjoerd Stallinga (Department of Imaging Physics, TU Delft), called 1FRC, which uses a technique called binomial splitting to derive two images from a single one, where the pixel counts of the derived images are independently Poisson noise distributed.
+Releases go through [touchgate](https://github.com/borink-org/touchgate) and publish all three packages at one version: the crate to crates.io, and frc-core before frc to PyPI.
 
-This library was produced for my bachelor thesis in 2022 (which focused on 1FRC) and was supervised by Bernd Rieger. [The bachelor thesis can be found here](http://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a). Bernd Rieger and Sjoerd Stallinga continued research, leading to a peer reviewed paper published in 2024 in Optics Express, [which can be found here](https://doi.org/10.1364/OE.524683). Their paper includes many details on the limitations of 1FRC and when exactly it is appropriate. I repeat the abstract below:
+1. Run `touchgate prepare <version>` on `main` and push it, or start the `touchgate` workflow with the version and merge its pull request. It dates `## Unreleased` and sets the version everywhere, including frc's requirement on frc-core and both lock files.
+2. On the same day or the next, run `touchgate approve`. It signs an approval of the tip of `main` with the security key and starts `release.yml`, which builds and tests every file with `wheels.yml`, waits for the commit's checks, publishes, and tags the release last. If it fails, re-run its failed jobs; publishing skips what a registry has already.
 
-> We address resolution assessment for (light super-resolution) microscopy imaging. In modalities where imaging is not diffraction limited, correlation between two noise independent images is the standard way to infer the resolution. Here we take away the need for two noise independent images by computationally splitting one image acquisition into two noise independent realizations. This procedure generates two Poisson noise distributed images if the input is Poissonian distributed. As most modern cameras are shot-noise limited this procedure is directly applicable. However, also in the presence of readout noise we can compute the resolution faithfully via a correction factor. We evaluate our method on simulations and experimental data of widefield microscopy, STED microscopy, rescan confocal microscopy, image scanning microscopy, conventional confocal microscopy, and transmission electron microscopy. In all situations we find that using one image instead of two results in the same computed image resolution.
+`release.yml` and `wheels.yml` run from the `publish` branch, and the jobs that publish run in the `release` environment, which admits only that branch. crates.io and PyPI trust only that workflow in that environment. A change to either file goes on `main` and is then copied to `publish`. Every pull request adds a line under `## Unreleased` in `CHANGELOG.md`.
 
-### Installation
+## License
 
-You can download this library from PyPI:
-
-```shell
-pip install frc
-```
-
-This library depends on [rustfrc](https://github.com/tiptenbrink/rustfrc) (a Rust extension developed specifically for this library), [DIPlib](https://github.com/DIPlib/diplib), [scipy](https://scipy.org/) and of course, [numpy](https://numpy.org/).
-
-### Usage
-
-The code snippet below (which for illustration purposes assumes you have a numpy array or DIP image representing your input, its associated scale and also matplotlib to plot the result) will calculate the FRC curve and the associated resolution using the standard 1/7 threshold.
-
-```python
-import frc
-import numpy as np
-import matplotlib.pyplot as plt
-
-... # get an image and scale
-
-img = np.array(img)
-# Input can be a numpy array or DIP image
-img = frc.util.square_image(img, add_padding=False)
-img = frc.util.apply_tukey(img)
-# Apply 1FRC technique
-frc_curve = frc.one_frc(img)
-
-img_size = img.shape[0]
-xs_pix = np.arange(len(frc_curve)) / img_size
-# scale has units [pixels <length unit>^-1] corresponding to original image
-xs_nm_freq = xs_pix * scale
-frc_res, res_y, thres = frc.frc_res(xs_nm_freq, frc_curve, img_size)
-plt.plot(xs_nm_freq, thres(xs_nm_freq))
-plt.plot(xs_nm_freq, frc_curve)
-plt.show()
-```
-
-#### Troubleshooting
-
-If you cannot find an intersection (`NoIntersectionException`), be sure to plot the curve without using the `frc_res` method and see if there even is an intersection. For example:
-
-```python
-import frc
-import numpy as np
-import matplotlib.pyplot as plt
-
-img = ... # get an image and scale
-
-# Apply 1FRC technique
-frc_curve = frc.one_frc(img)
-img_size = img.shape[0]
-xs_pix = np.arange(len(frc_curve)) / img_size
-# scale has units [pixels <length unit>^-1] corresponding to original image
-xs_nm_freq = xs_pix * scale
-plt.plot(xs_nm_freq, frc_curve)
-plt.show()
-```
-
-For images with a significant amount of non-Poisson noise, the 1FRC method has been shown to fail (adjustments are possible).
-
-### Development
-
-frc uses [uv](https://github.com/astral-sh/uv). Run `uv sync` to create a virtual environment with the (development) dependencies, `uv run pytest` to run the tests and `uv build` to build the package.
-
-### Releasing
-
-Releases go through [touchgate](https://github.com/borink-org/touchgate):
-
-1. Run `touchgate prepare 0.2.0` on `main`, which dates `## Unreleased` and sets the version, then commit and push it.
-2. Run `touchgate approve` on the same day or the next. It asks for the security key's PIN and a touch, signs an approval of the tip of `main` and starts `release.yml` with it. The release waits for every check on that commit, publishes to PyPI, then makes the tag and the GitHub release.
-
-Every pull request adds a line under `## Unreleased` in `CHANGELOG.md`. `release.yml` publishes only from the `publish` branch. A change to it goes on `main`, and the repository owner copies it to `publish`.
+All three packages are licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. `crates/frc` and `python/frc` link to both files, and `python/frc-core`, whose wheels are also built on Windows, keeps copies of them.

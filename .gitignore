@@ -1,5 +1,10 @@
+/target
 **/*.pyc
+**/__pycache__/
+**/*.pyd
+*.so
 dist
 .idea
 .python-version
-**/*.pyd
+.venv
+.pytest_cache
