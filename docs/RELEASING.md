@@ -31,5 +31,4 @@ These are made once, with `tmtenbrink` in the browser. The first two exist from 
 
 ## Before the first release
 
-- touchgate releases several packages together from the commit that the install steps of `release.yml` and `touchgate.yml` build from source. Once a touchgate release has it, pin those steps to the release and drop `from-source`.
 - crates.io needs `frc` to exist before it trusts `release.yml`. Deciding how it gets there, such as a first publish by hand, is the owner's.

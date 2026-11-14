@@ -45,11 +45,7 @@ jobs:
       contents: write # to push the release branch
       pull-requests: write # to open the pull request
     steps:
-      # Built from the commit that releases several packages together, until
-      # a touchgate release has it.
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       # The credentials stay, to push the release branch. They can do no more
       # than anyone who can start this workflow.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
@@ -74,9 +70,7 @@ jobs:
     permissions:
       contents: read # to check out the history
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

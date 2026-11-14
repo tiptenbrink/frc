@@ -4,10 +4,6 @@
 # starts it with a signed approval, and the copies of this file and wheels.yml
 # on `publish` run. crates.io and PyPI trust this file in the `release`
 # environment. docs/RELEASING.md describes the setup.
-#
-# Until touchgate releases support for several packages, every job builds
-# touchgate from the commit that adds it. Pin the install steps to that
-# release before the first release from this file.
 name: release
 
 on:
@@ -40,9 +36,7 @@ jobs:
     permissions:
       contents: read # to fetch the default branch
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -67,9 +61,7 @@ jobs:
     permissions:
       contents: read # to check out the release
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
@@ -100,9 +92,7 @@ jobs:
     permissions:
       checks: read # to read the release commit's check runs
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - run: touchgate wait-for-checks
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,9 +111,7 @@ jobs:
       contents: read # to check out the release
       id-token: write # for crates.io trusted publishing
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
@@ -151,9 +139,7 @@ jobs:
       contents: read # to check out the release
       id-token: write # for PyPI trusted publishing and the attestations
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
@@ -177,9 +163,7 @@ jobs:
     permissions:
       contents: write # to create the tag and the release
     steps:
-      - uses: borink-org/touchgate/install@4e54f80c9bd9670fc17513ea40a7e9a113b77448 # several-packages
-        with:
-          from-source: true
+      - uses: borink-org/touchgate/install@535fb730cb153a9453abff103fe2430e45af14c0 # v0.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
