@@ -29,9 +29,7 @@ curve = np.asarray(frc_core.one_frc(img, seed=1))
 On 8 threads of an AMD EPYC 9V45 (Zen 5, AVX-512), with mean counts of 100 to 200:
 
 - `binom_split`: its sampler takes ~1 ms on a 2000x2000 array, against ~49 ms for rustfrc 1.2.
-- `FrcPlan.one_frc`: ~18 ms on a 4096x4096 image with a reused plan, ~30 ms with `one_frc`, which makes the plan, against ~1000 ms for `frc.one_frc` 0.1 (rustfrc 1.2's split with DIPlib's FFT and `RadialSum`).
-
-[docs/PERFORMANCE.md](https://github.com/tiptenbrink/frc/blob/main/docs/PERFORMANCE.md) describes where the time goes, what was tried to make each step faster, and the literature behind the choices.
+- `FrcPlan.one_frc`: ~18 ms on a 4096x4096 image with a reused plan, ~30 ms with `one_frc`, which makes the plan, against ~1000 ms for `frc.one_frc` 0.2 (rustfrc 1.2's split with DIPlib's FFT and `RadialSum`).
 
 ## Installation
 

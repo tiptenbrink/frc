@@ -4,7 +4,7 @@
 
 This is particularly useful for determining the resolution of images taken with super-resolution microscopy techniques.
 
-Its most computationally intensive functions are implemented in Rust, in [frc-core](https://pypi.org/project/frc-core/), which is released with frc from the same repository: the binomial split and the FRC itself, with its Fourier transforms and ring sums. `one_frc` on a 4096x4096 image takes about 30 ms on 8 threads of an AMD EPYC 9V45, instead of about 1 s in frc 0.1. The same code is also a Rust crate, [`frc`](https://crates.io/crates/frc).
+Its most computationally intensive functions are implemented in Rust, in [frc-core](https://pypi.org/project/frc-core/), which is released with frc from the same repository: the binomial split and the FRC itself, with its Fourier transforms and ring sums. `one_frc` on a 4096x4096 image takes about 30 ms on 8 threads of an AMD EPYC 9V45, instead of about 1 s in frc 0.2. The same code is also a Rust crate, [`frc`](https://crates.io/crates/frc).
 
 ### Fourier Ring Correlation
 

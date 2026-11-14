@@ -16,7 +16,6 @@ Most users want the first: `pip install frc`, and see [its README](python/frc/RE
 - `crates/frc-python`: the PyO3 bindings, built into the module `frc_core._internal`, and never published to crates.io. `buffers.rs` reads arrays through the buffer protocol and makes the `memoryview`s, and `buffer_memory.rs` holds its only unsafe code.
 - `python/frc-core`: the Python package frc-core, built with maturin from `crates/frc-python`. `frc_core/_internal.pyi` holds the module's types.
 - `python/frc`: the Python package frc, pure Python, built with uv.
-- `docs/PERFORMANCE.md`: where the time goes, what was tried, and the literature. `docs/history` keeps rustfrc's changelog.
 
 ## Development
 
@@ -28,7 +27,12 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a Rust
 
 ## Releasing
 
-Releases go through [touchgate](https://github.com/borink-org/touchgate) and publish all three packages at one version; [docs/RELEASING.md](docs/RELEASING.md) describes how, and the settings behind it. Every pull request adds a line under `## Unreleased` in `CHANGELOG.md`.
+Releases go through [touchgate](https://github.com/borink-org/touchgate) and publish all three packages at one version: the crate to crates.io, and frc-core before frc to PyPI.
+
+1. Run `touchgate prepare <version>` on `main` and push it, or start the `touchgate` workflow with the version and merge its pull request. It dates `## Unreleased` and sets the version everywhere, including frc's requirement on frc-core and both lock files.
+2. On the same day or the next, run `touchgate approve`. It signs an approval of the tip of `main` with the security key and starts `release.yml`, which builds and tests every file with `wheels.yml`, waits for the commit's checks, publishes, and tags the release last. If it fails, re-run its failed jobs; publishing skips what a registry has already.
+
+`release.yml` and `wheels.yml` run from the `publish` branch, and the jobs that publish run in the `release` environment, which admits only that branch. crates.io and PyPI trust only that workflow in that environment. A change to either file goes on `main` and is then copied to `publish`. Every pull request adds a line under `## Unreleased` in `CHANGELOG.md`.
 
 ## License
 

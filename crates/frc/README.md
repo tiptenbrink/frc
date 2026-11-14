@@ -17,4 +17,4 @@ let curve = plan.one_frc(&counts, 1).unwrap();
 assert_eq!(curve.len(), n / 2);
 ```
 
-The Python packages [frc-core](https://pypi.org/project/frc-core/), without dependencies, and [frc](https://pypi.org/project/frc/), with a NumPy API, thresholds and resolution, are built from this crate in the same [repository](https://github.com/tiptenbrink/frc). Its [docs/PERFORMANCE.md](https://github.com/tiptenbrink/frc/blob/main/docs/PERFORMANCE.md) describes where the time goes and the literature behind the choices.
+The Python packages [frc-core](https://pypi.org/project/frc-core/), without dependencies, and [frc](https://pypi.org/project/frc/), with a NumPy API, thresholds and resolution, are built from this crate in the same [repository](https://github.com/tiptenbrink/frc).
