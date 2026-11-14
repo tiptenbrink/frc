@@ -5,7 +5,6 @@ description = "The compiled core of frc, without dependencies: an exact binomial
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
 authors = [
   {name = "Tip ten Brink", email = "tip@tenbrinkmeijs.com"},
 ]
