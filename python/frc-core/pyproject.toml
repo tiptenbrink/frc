@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "The compiled core of frc, without dependencies: an exact binomial split and Fourier ring correlation for arrays that support the buffer protocol."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 authors = [
   {name = "Tip ten Brink", email = "tip@tenbrinkmeijs.com"},
 ]

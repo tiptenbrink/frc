@@ -6,7 +6,7 @@ authors = [
     {name = "Tip ten Brink", email = "tip@tenbrinkmeijs.com"},
 ]
 readme = "README.md"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 # Each NumPy floor is the oldest release with wheels for that Python on Linux

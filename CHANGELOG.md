@@ -20,6 +20,7 @@ frc now computes the FRC in Rust, and this repository releases three packages at
 - `gaussf` filters with NumPy. For sigmas of 0.8 and more it gives what DIPlib gave, to within 1e-14; for smaller sigmas, DIPlib used a Fourier method instead.
 - `tukey_square` computes its window with NumPy, as SciPy did.
 - frc no longer caps the Python version.
+- frc is licensed under MIT or Apache-2.0, at your option, instead of MIT alone, as are frc-core and the crate frc.
 
 ### Removed
 

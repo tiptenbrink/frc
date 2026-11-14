@@ -36,4 +36,4 @@ Releases go through [touchgate](https://github.com/borink-org/touchgate) and pub
 
 ## License
 
-The crate frc and frc-core are licensed under Apache-2.0, in `crates/frc/LICENSE`, which maturin also puts in frc-core's sdist and wheels. The Python library frc is licensed under MIT, in `python/frc/LICENSE`.
+All three packages are licensed under MIT or Apache-2.0, at your option, as `LICENSE` says. Each package includes that file: the crate and frc-core through Cargo's `license-file`, and frc through the symlink `python/frc/LICENSE`.
