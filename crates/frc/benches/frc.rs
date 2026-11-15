@@ -1,12 +1,11 @@
 //! Times `binom_split`, `FrcPlan::one_image` and `FrcPlan::two_images` at several image
-//! sizes, and the steps of `FrcPlan::one_image` at 4096 x 4096. Rayon uses every core unless
-//! `RAYON_NUM_THREADS` says otherwise.
+//! sizes. Rayon uses every core unless `RAYON_NUM_THREADS` says otherwise.
 
 use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use frc::{CpuFeatures, FrcPlan, Rings, Window, binom_split};
+use frc::{CpuFeatures, FrcPlan, RingBinning, Window, binom_split};
 use rand::SeedableRng;
 use rand_distr::{Distribution, Poisson};
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -50,7 +49,7 @@ fn frc(c: &mut Criterion) {
     for n in [1024, 2048, 4000, 4096, 8192] {
         let image = image(n);
         let floats: Vec<f32> = image.iter().map(|&v| v as f32).collect();
-        let mut plan = FrcPlan::new(n, Rings::default());
+        let mut plan = FrcPlan::new(n, RingBinning::default());
         group.throughput(Throughput::Elements((n * n) as u64));
         group.bench_function(BenchmarkId::new("one_image", n), |b| {
             b.iter(|| {
@@ -65,24 +64,6 @@ fn frc(c: &mut Criterion) {
     group.finish();
 }
 
-fn steps(c: &mut Criterion) {
-    let n = 4096;
-    let image = image(n);
-    let mut plan = FrcPlan::new(n, Rings::default());
-    plan.one_image(&image, Window::default(), SEED).unwrap();
-    let mut group = c.benchmark_group("one_image_steps_4096");
-    group.bench_function("split_fft_rows", |b| {
-        b.iter(|| {
-            plan.split_fft_rows(black_box(&image), Window::default(), SEED)
-                .unwrap()
-        })
-    });
-    group.bench_function("fft_columns_ring_sums", |b| {
-        b.iter(|| plan.fft_columns_ring_sums())
-    });
-    group.finish();
-}
-
 /// Short runs, so that the whole benchmark takes minutes.
 fn quick() -> Criterion {
     Criterion::default()
@@ -94,6 +75,6 @@ fn quick() -> Criterion {
 criterion_group! {
     name = benches;
     config = quick();
-    targets = split, frc, steps
+    targets = split, frc
 }
 criterion_main!(benches);

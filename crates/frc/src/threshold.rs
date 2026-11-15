@@ -39,39 +39,22 @@ pub struct Crossing {
     pub ring: f64,
     /// The threshold at the crossing.
     pub threshold: f64,
+    /// The resolution in pixels: n / ring for n x n images. It is infinite for a curve that
+    /// starts below its threshold, which crosses at ring 0.
+    pub resolution: f64,
 }
 
-impl Crossing {
-    /// Returns the resolution of an n x n image in pixels: n / ring.
-    pub fn resolution(&self, n: usize) -> f64 {
-        n as f64 / self.ring
-    }
-}
-
-/// Returns the point at which `curve` first drops below `threshold`, or `None` if it does not.
-///
-/// `curve` holds the FRC of ring r at index r, as [`FrcPlan::one_image`](crate::FrcPlan::one_image)
-/// returns it, and `ring_counts` the number of frequencies in each ring, as
-/// [`FrcPlan::ring_counts`](crate::FrcPlan::ring_counts) returns them. This function finds the
-/// first ring i >= 1 whose FRC is below its threshold. It draws a straight line through the
-/// FRC minus the threshold at rings i - 1 and i, and returns the point at which the line is
-/// zero. A ring whose FRC is NaN counts as not below the threshold.
-///
-/// # Panics
-///
-/// Panics if `ring_counts` holds fewer values than `curve`.
-pub fn first_crossing(
+/// Returns the point at which `curve` first drops below `threshold`, for n x n images whose
+/// rings hold `counts` frequencies each, or `None` if it does not. `counts` holds at least as
+/// many values as `curve`. [`Rings::first_crossing`](crate::Rings::first_crossing) describes
+/// the rule.
+pub(crate) fn crossing_of(
     curve: &[f64],
-    ring_counts: &[u64],
+    counts: &[u64],
+    n: usize,
     threshold: Threshold,
 ) -> Option<Crossing> {
-    assert!(
-        ring_counts.len() >= curve.len(),
-        "ring_counts holds {} values, at least {} required",
-        ring_counts.len(),
-        curve.len()
-    );
-    let threshold_of = |r: usize| threshold.of_ring(ring_counts[r]);
+    let threshold_of = |r: usize| threshold.of_ring(counts[r]);
     let above = |r: usize| curve[r] - threshold_of(r);
     let i = (1..curve.len()).find(|&r| above(r) < 0.0)?;
     let (before, after) = (above(i - 1), above(i));
@@ -83,9 +66,11 @@ pub fn first_crossing(
         (before / (before - after)).clamp(0.0, 1.0)
     };
     let (threshold_before, threshold_after) = (threshold_of(i - 1), threshold_of(i));
+    let ring = (i - 1) as f64 + fraction;
     Some(Crossing {
-        ring: (i - 1) as f64 + fraction,
+        ring,
         threshold: threshold_before + fraction * (threshold_after - threshold_before),
+        resolution: n as f64 / ring,
     })
 }
 
@@ -112,20 +97,20 @@ mod tests {
     fn the_crossing_lies_on_the_line_between_two_rings() {
         let counts = [1, 8, 12, 16, 28, 24];
         let curve = [1.0, 0.6, 0.3, 0.2, 0.1, 0.2];
-        let crossing = first_crossing(&curve, &counts, Threshold::Fixed(0.15)).unwrap();
+        let crossing = crossing_of(&curve, &counts, 14, Threshold::Fixed(0.15)).unwrap();
         assert_eq!(
             crossing,
             Crossing {
                 ring: 3.5,
-                threshold: 0.15
+                threshold: 0.15,
+                resolution: 4.0
             }
         );
-        assert_eq!(crossing.resolution(14), 4.0);
         // The first crossing counts, and a curve that never drops below has none.
-        let crossing = first_crossing(&curve, &counts, Threshold::Fixed(0.4)).unwrap();
+        let crossing = crossing_of(&curve, &counts, 14, Threshold::Fixed(0.4)).unwrap();
         assert!((crossing.ring - (1.0 + 0.2 / 0.3)).abs() < 1e-12);
         assert_eq!(
-            first_crossing(&curve, &counts, Threshold::Fixed(0.05)),
+            crossing_of(&curve, &counts, 14, Threshold::Fixed(0.05)),
             None
         );
     }
@@ -134,7 +119,7 @@ mod tests {
     fn the_half_bit_crossing_interpolates_the_threshold_too() {
         let counts = [1, 8, 12, 16];
         let curve = [1.0, 0.9, 0.2, 0.1];
-        let crossing = first_crossing(&curve, &counts, Threshold::HalfBit).unwrap();
+        let crossing = crossing_of(&curve, &counts, 8, Threshold::HalfBit).unwrap();
         let (t1, t2) = (
             Threshold::HalfBit.of_ring(8),
             Threshold::HalfBit.of_ring(12),
@@ -146,14 +131,19 @@ mod tests {
 
     #[test]
     fn a_curve_that_starts_below_its_threshold_crosses_at_ring_0() {
-        let crossing = first_crossing(&[0.5, 0.3, 0.2], &[1, 8, 12], Threshold::Fixed(0.6));
+        let crossing = crossing_of(&[0.5, 0.3, 0.2], &[1, 8, 12], 6, Threshold::Fixed(0.6));
         assert_eq!(crossing.map(|c| c.ring), Some(0.0));
     }
 
     #[test]
     fn nan_rings_are_not_below_the_threshold() {
         let counts = [1, 8, 12, 16];
-        let crossing = first_crossing(&[1.0, f64::NAN, 0.05, 0.3], &counts, Threshold::OneSeventh);
+        let crossing = crossing_of(
+            &[1.0, f64::NAN, 0.05, 0.3],
+            &counts,
+            8,
+            Threshold::OneSeventh,
+        );
         assert_eq!(crossing.map(|c| c.ring), Some(2.0));
     }
 }

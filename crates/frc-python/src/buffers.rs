@@ -296,7 +296,7 @@ impl InputBuffer {
             Element::F32 => self.convert_into(&mut out, |v: f32| v as f64),
             _ => {
                 return Err(PyTypeError::new_err(format!(
-                    "{} must hold floats, as one_frc and two_frc return them",
+                    "{} must hold floats, as FrcPlan.one_image and two_images return them",
                     self.name
                 )));
             }

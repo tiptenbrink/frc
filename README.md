@@ -22,13 +22,13 @@ counts = frc.util.square_image(counts, add_padding=False)
 
 plan = frc.FrcPlan(counts.shape[0])
 curve = plan.one_image(counts)
-resolution = plan.resolution(curve)
-print(f"resolution: {resolution:.2f} pixels")
+crossing = plan.first_crossing(curve)
+print(f"resolution: {crossing.resolution:.2f} pixels")
 ```
 
-`one_image` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) to both halves. `resolution` finds where the curve first drops below the threshold and returns one over that spatial frequency, in pixels. Multiply it by the pixel size for a length.
+`one_image` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) to both halves. `first_crossing` finds where the curve first drops below the threshold. The `resolution` of the crossing is one over its spatial frequency, in pixels. Multiply it by the pixel size for a length.
 
-The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a number. If the curve never drops below the threshold, `resolution` raises `frc.NoIntersectionException`. Plotting `curve` against `plan.frequencies()` usually shows why.
+The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a number. If the curve never drops below the threshold, `first_crossing` returns `None`. Plotting `curve` against `plan.frequencies()` usually shows why. To find the resolution from a curve without a plan, use `frc.Rings(n).first_crossing(curve)`, which needs no Fourier transform.
 
 If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `plan.two_images(img1, img2)` instead of `one_image`.
 
@@ -42,7 +42,7 @@ For two images with Fourier transforms F₁ and F₂, the FRC at spatial frequen
 
 where the sums run over the ring of frequencies **q** at distance q from the origin. At low frequencies the object dominates both images, and the FRC is close to 1. At high frequencies the independent noise dominates, and the FRC drops to around 0. The resolution is one over the spatial frequency at which the curve crosses a threshold [[1]][ref1], [[3]][ref3].
 
-For an image of n × n pixels, frc computes the FRC of the rings r = 0, 1, …, n/2 − 1, and ring r has spatial frequency r/n. With `rings="nearest"`, ring r holds the frequencies whose distance to the origin rounds to r. With `rings="floor"`, it holds the frequencies at a distance d with r ≤ d < r + 1, as in [DIPlib](https://diplib.org)'s `RadialSum`.
+For an image of n × n pixels, frc computes the FRC of the rings r = 0, 1, …, n/2 − 1, and ring r has spatial frequency r/n. With `binning="nearest"`, ring r holds the frequencies whose distance to the origin rounds to r. With `binning="floor"`, it holds the frequencies at a distance d with r ≤ d < r + 1, as in [DIPlib](https://diplib.org)'s `RadialSum`.
 
 ## When 1FRC works
 
@@ -56,7 +56,7 @@ This only holds if the pixel values are Poisson-distributed photon counts. Camer
 
 ## Differences from earlier versions
 
-Earlier versions of frc made three choices that shift the resolution by one to a few percent. `FrcPlan`, frc-core and the Rust crate make the new choices. The legacy functions `one_frc`, `two_frc` and `frc_res` of frc keep the old choices by default, so that they reproduce earlier results. They make the new choices with `tukey_alpha`, `rings="nearest"` and `crossing="first"`.
+Earlier versions of frc made three choices that shift the resolution by one to a few percent. `FrcPlan`, frc-core and the Rust crate make the new choices. The legacy functions `one_frc`, `two_frc` and `frc_res` of frc keep the old choices by default, so that they reproduce earlier results. `one_frc` and `two_frc` make the first two new choices with `tukey_alpha` and `binning="nearest"`. `frc_res` always uses the band of earlier versions.
 
 | | Earlier versions | Now | Effect of the old choice on the resolution |
 |---|---|---|---|
@@ -66,7 +66,7 @@ Earlier versions of frc made three choices that shift the resolution by one to a
 
 We measured these effects in November 2026 on simulated images of 256 × 256 pixels: sparse points blurred by a Gaussian of 2 pixels, with Poisson noise. We compared each 1FRC with the 2FRC of two independent images with half the counts each. With the window applied after the split, the 1FRC matched the 2FRC at every count level.
 
-With `rings="floor"`, the frequencies in ring r lie on average half a ring above r, but the curve places the ring at r. The band of rings that earlier versions averaged often reaches past the first crossing, where a noisy curve rises above the threshold again.
+With `binning="floor"`, the frequencies in ring r lie on average half a ring above r, but the curve places the ring at r. The band of rings that earlier versions averaged often reaches past the first crossing, where a noisy curve rises above the threshold again.
 
 When the legacy `one_frc` splits an image whose values are not whole numbers, such as an image that was already windowed, it warns with a `frc.NotCountsWarning`. `FrcPlan.one_image` refuses such an image.
 

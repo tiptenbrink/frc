@@ -2,11 +2,12 @@
 
 import frc_core
 import numpy as np
+from frc_core import Crossing, Rings
 
 import frc._internal_utility as _util
-from frc.deps_types import Img, NoIntersectionException
+from frc.deps_types import Img
 
-__all__ = ['FrcPlan']
+__all__ = ['FrcPlan', 'Rings', 'Crossing']
 
 
 class FrcPlan:
@@ -17,24 +18,24 @@ class FrcPlan:
     plan keeps the Fourier transform plan and the working memory between
     curves.
 
-    A plan uses the corrected defaults of frc-core: one_image applies a Tukey
-    window after the split, ring r holds the frequencies whose distance from
-    the origin rounds to r, and resolution interpolates the first crossing
-    of the threshold. The functions one_frc, two_frc and frc_res keep the
-    defaults of earlier versions of frc.
+    A plan uses the corrected defaults of frc-core: one_image applies a
+    Tukey window after the split, ring r holds the frequencies whose
+    distance from the origin rounds to r, and first_crossing interpolates
+    the first crossing of the threshold. The functions one_frc, two_frc and
+    frc_res keep the defaults of earlier versions of frc.
 
     A plan computes one curve at a time. Threads that share a plan take
     turns.
 
     :param n: The side of the images, in pixels.
-    :param rings: Which frequencies f make up ring r. With 'nearest', the
+    :param binning: Which frequencies f make up ring r. With 'nearest', the
     default, ring r holds the frequencies whose distance |f| from the
     origin rounds to r. With 'floor', it holds those with r ≤ |f| < r + 1,
     as earlier versions of frc did.
     """
 
-    def __init__(self, n: int, rings: str = "nearest"):
-        self._plan = frc_core.FrcPlan(n, rings)
+    def __init__(self, n: int, binning: str = "nearest"):
+        self._plan = frc_core.FrcPlan(n, binning)
 
     @property
     def size(self) -> int:
@@ -42,8 +43,9 @@ class FrcPlan:
         return self._plan.size
 
     @property
-    def rings(self) -> str:
-        """The rings of the plan's curves: 'nearest' or 'floor'."""
+    def rings(self) -> Rings:
+        """The rings that the plan's curves sum over: their binning and the
+        number of frequencies in each."""
         return self._plan.rings
 
     def frequencies(self) -> np.ndarray:
@@ -53,10 +55,6 @@ class FrcPlan:
         """
         n = self.size
         return np.arange(n // 2) / n
-
-    def ring_counts(self) -> np.ndarray:
-        """Returns the number of frequencies in each ring r < n / 2."""
-        return np.asarray(self._plan.ring_counts())
 
     def one_image(self, img: Img, seed: int | None = None, tukey_alpha: float = 0.125) -> np.ndarray:
         """
@@ -100,24 +98,22 @@ class FrcPlan:
         """
         return np.asarray(self._plan.two_images(np.asarray(img1), np.asarray(img2)))
 
-    def resolution(self, curve: np.ndarray, threshold: str | float = "1/7") -> float:
+    def first_crossing(self, curve: np.ndarray, threshold: str | float = "1/7") -> Crossing | None:
         """
-        Computes the resolution, in pixels, from a curve of this plan.
+        Finds the point at which a curve of this plan first drops below its
+        threshold.
 
-        resolution finds the first ring i whose FRC is below the threshold,
-        and interpolates linearly between rings i - 1 and i to find where
-        the curve crosses the threshold. The resolution is one over the
-        spatial frequency of the crossing. Multiply it by the pixel size for
-        a length.
+        first_crossing finds the first ring i whose FRC is below the
+        threshold, and interpolates linearly between rings i - 1 and i to
+        find where the curve crosses the threshold. The crossing's
+        resolution is one over its spatial frequency, in pixels. Multiply it
+        by the pixel size for a length.
 
         :param curve: A curve that one_image or two_images of this plan
         returned.
         :param threshold: '1/7', the default, 'half_bit' for the 1/2-bit
         threshold, or a number.
-        :raises NoIntersectionException: If the curve does not drop below
-        the threshold.
+        :return: The crossing, with its ring, its threshold and the
+        resolution, or None if the curve does not drop below the threshold.
         """
-        found = self._plan.resolution(np.asarray(curve, dtype=np.float64), threshold)
-        if found is None:
-            raise NoIntersectionException("the curve does not drop below its threshold")
-        return found[0]
+        return self._plan.first_crossing(np.asarray(curve, dtype=np.float64), threshold)

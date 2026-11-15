@@ -5,15 +5,16 @@
 //! [`FrcPlan::two_images`]: FrcPlan::two_images
 //! [`FrcPlan::one_image_ring_sums`]: FrcPlan::one_image_ring_sums
 //! [`FrcPlan::two_images_ring_sums`]: FrcPlan::two_images_ring_sums
+//! [`FrcPlan::first_crossing`]: FrcPlan::first_crossing
 //! [`RingSums`]: RingSums
 //! [`Rings`]: Rings
-//! [`Rings::Nearest`]: Rings::Nearest
-//! [`Rings::Floor`]: Rings::Floor
+//! [`Rings::first_crossing`]: Rings::first_crossing
+//! [`RingBinning`]: RingBinning
+//! [`RingBinning::Nearest`]: RingBinning::Nearest
+//! [`RingBinning::Floor`]: RingBinning::Floor
 //! [`Threshold`]: Threshold
-//! [`first_crossing`]: first_crossing
-//! [`Crossing::resolution`]: Crossing::resolution
+//! [`Crossing`]: Crossing
 //! [`Window`]: Window
-//! [`ring_counts`]: ring_counts
 //! [`binom_split`]: binom_split
 #![doc = include_str!("../README.md")]
 #![deny(unsafe_code)]
@@ -30,7 +31,7 @@ mod window;
 
 pub use binomial::{NegativeCount, binom_split};
 pub use cpu::CpuFeatures;
-pub use frc::{FrcPlan, RingSums, ring_counts};
-pub use rings::Rings;
-pub use threshold::{Crossing, Threshold, first_crossing};
+pub use frc::{FrcPlan, RingSums};
+pub use rings::{RingBinning, Rings};
+pub use threshold::{Crossing, Threshold};
 pub use window::Window;

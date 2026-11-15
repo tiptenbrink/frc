@@ -18,15 +18,21 @@ import frc
 counts = frc.util.square_image(counts, add_padding=False)
 plan = frc.FrcPlan(counts.shape[0])
 curve = plan.one_image(counts)
-resolution = plan.resolution(curve)  # in pixels
+crossing = plan.first_crossing(curve)
+if crossing is not None:
+    print(f"resolution: {crossing.resolution:.2f} pixels")
 ```
 
-`FrcPlan(n, rings="nearest")` holds the Fourier transform plan and the working memory for images of n × n pixels. Its methods:
+`FrcPlan(n, binning="nearest")` holds the Fourier transform plan and the working memory for images of n × n pixels. Its methods:
 
 - `one_image(img, seed=None, tukey_alpha=0.125)` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window), and returns their FRC curve. The same image and `seed` give the same curve.
 - `two_images(img1, img2)` returns the FRC curve of two images of the same object with independent noise. Multiply both by `frc.util.tukey_square(n)` first.
-- `resolution(curve, threshold="1/7")` returns the resolution in pixels. It interpolates where the curve first drops below the threshold, which is `"1/7"`, `"half_bit"` or a number. It raises `frc.NoIntersectionException` if the curve does not drop below the threshold.
+- `first_crossing(curve, threshold="1/7")` interpolates where the curve first drops below the threshold, which is `"1/7"`, `"half_bit"` or a number. It returns a `Crossing` with the `resolution` in pixels, the `ring` at which the curve crosses and the `threshold` there, or `None` if the curve does not drop below the threshold.
 - `frequencies()` returns the spatial frequency of each ring in 1/pixel. Plot the curve against it to see where it crosses the threshold.
+
+With `binning="nearest"`, ring r holds the frequencies whose distance from the origin rounds to r. With `binning="floor"`, it holds those at a distance d with r ≤ d < r + 1, as earlier versions did.
+
+To find the resolution from a curve without a plan, make `frc.Rings(n, binning="nearest")` for the size of the image. It needs no Fourier transform, and its `first_crossing` is the plan's.
 
 `frc.util` holds `apply_tukey`, `tukey_square`, `tukey_window`, `square_image`, `gaussf` and `intersection`.
 
@@ -34,9 +40,9 @@ resolution = plan.resolution(curve)  # in pixels
 
 The functions `one_frc`, `two_frc` and `frc_res` are the API of earlier versions of frc. They keep its defaults, so that earlier results can be reproduced. Each default shifts the resolution by one to a few percent:
 
-- `one_frc(img, method=1, seed=None, tukey_alpha=None, rings="floor")` applies no window unless you pass `tukey_alpha`. In earlier versions, you windowed the image yourself before the split, which makes the resolution slightly coarser. With `tukey_alpha`, `one_frc` windows both halves after the split, as `FrcPlan` does. Method 2 splits the image twice, independently.
-- `rings` is `"floor"`, which places ring r about half a ring too low. Pass `rings="nearest"` for rings centred on r. `two_frc(img1, img2, rings="floor")` takes the same argument.
-- `frc_res(xs, frc_curve, img_size, threshold=None, rings="floor", crossing="band")` estimates the crossing from a band of rings around the threshold, which often gives a slightly finer resolution. Pass `crossing="first"` to interpolate the first crossing instead. `frc_res` also takes `xs` in any unit of frequency, and a threshold that is a function of the frequency.
+- `one_frc(img, method=1, seed=None, tukey_alpha=None, binning="floor")` applies no window unless you pass `tukey_alpha`. In earlier versions, you windowed the image yourself before the split, which makes the resolution slightly coarser. With `tukey_alpha`, `one_frc` windows both halves after the split, as `FrcPlan` does. Method 2 splits the image twice, independently.
+- `binning` is `"floor"`, which places ring r about half a ring too low. Pass `binning="nearest"` for rings centred on r. `two_frc(img1, img2, binning="floor")` takes the same argument.
+- `frc_res(xs, frc_curve, img_size, threshold=None, binning="floor")` estimates the crossing from a band of rings around the threshold, as earlier versions did. That often gives a slightly finer resolution than the first crossing, which `FrcPlan.first_crossing` interpolates. `frc_res` also takes `xs` in any unit of frequency, and a threshold that is a function of the frequency.
 
 The [repository's README](https://github.com/tiptenbrink/frc#differences-from-earlier-versions) gives the size of each effect and how it was measured.
 

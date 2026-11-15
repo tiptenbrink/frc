@@ -13,7 +13,8 @@ def test_split_an_array():
 
 def test_frc_of_a_memoryview():
     square = memoryview(array.array("q", [7] * 256)).cast("B").cast("q", [16, 16])
-    curve = frc_core.one_frc(square, seed=4)
+    plan = frc_core.FrcPlan(16)
+    curve = plan.one_image(square, seed=4)
     assert curve.format == "d" and len(curve) == 8
-    counts = frc_core.ring_counts(16)
+    counts = plan.rings.counts()
     assert counts.format == "Q" and counts.tolist()[:2] == [1, 8]
