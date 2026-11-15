@@ -1,78 +1,86 @@
 # frc
 
-frc computes Fourier ring correlation (FRC) curves of microscopy images, and the image resolution that follows from them. FRC compares two images of the same object whose noise is independent: classical FRC, or 2FRC. frc also computes it from one image, which is called single image FRC, or 1FRC. It splits the photon count of every pixel binomially into two images with independent Poisson noise [1].
+frc measures the resolution of microscopy images with Fourier ring correlation (FRC). Super-resolution microscopy goes beyond the diffraction limit, so its resolution no longer follows from the optics. FRC determines the resolution from the images themselves, by comparing two images of the same object with independent noise [[2]][ref2]. This is also called 2FRC, and in three dimensions Fourier shell correlation (FSC).
 
-## Measuring the resolution of one image
+frc can also compute the FRC of a single image of photon counts, by splitting it binomially into two images [[1]][ref1]. This is called 1FRC, or single image FRC. frc was originally written for a bachelor thesis on 1FRC at Delft University of Technology [[6]][ref6].
 
-1. Install the Python library frc. In a project managed by [uv](https://docs.astral.sh/uv/), run `uv add frc`. frc is on PyPI, so `pip install frc` also works, in a conda environment too.
-2. Convert your image to photon counts: subtract the camera offset, divide by the gain, and round to whole numbers. Do nothing else to the image before the split, not even a window.
-3. Crop the image to a square.
-4. Call `frc.one_frc` with the counts and a `tukey_alpha`. It splits the counts, multiplies both halves by a Tukey window with that alpha, and returns the FRC of each ring of frequencies.
-5. Call `frc.frc_res` with the curve and `crossing="first"`. It finds the first ring whose FRC is below the threshold, interpolates between that ring and the one before it, and returns the resolution: one over the frequency of the crossing.
+## Measuring the resolution of an image
+
+Install the Python library frc. In a project managed by [uv](https://docs.astral.sh/uv/), run `uv add frc`. `pip install frc` also works, in a conda environment too.
+
+1. Convert the image to photon counts: subtract the camera offset, divide by the gain and round to whole numbers. Do not process the image any further before the split, not even with a window.
+2. Crop the image to a square.
+3. Make an `frc.FrcPlan` for the size of the image, and compute the 1FRC curve and the resolution with it. Use the same plan for every image of that size.
 
 ```python
 import numpy as np
 import frc
 
-# raw holds one camera image, and offset and gain the camera's calibration. one_frc refuses
-# negative counts.
+# raw is one camera image, and offset and gain are the camera's calibration.
 counts = np.clip(np.rint((raw - offset) / gain), 0, None).astype(np.int32)
 counts = frc.util.square_image(counts, add_padding=False)
 
-curve = frc.one_frc(counts, tukey_alpha=0.125, rings="nearest")
-n = counts.shape[0]
-xs = np.arange(len(curve)) / n  # the frequency of each ring, in cycles per pixel
-resolution, _, _ = frc.frc_res(xs, curve, n, rings="nearest", crossing="first")
-print(f"resolution: {resolution:.2f} pixels")
+plan = frc.FrcPlan(counts.shape[0])
+curve = plan.one_image(counts)
+crossing = plan.first_crossing(curve)
+print(f"resolution: {crossing.resolution:.2f} pixels")
 ```
 
-Multiply the resolution by the pixel size for a length, or pass `xs` in cycles per unit of length, and the resolution comes out in that unit. For two images of the same object, multiply each by `frc.util.tukey_square(n)` and call `frc.two_frc(img1, img2, rings="nearest")` in place of `one_frc`.
+`one_image` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) to both halves. `first_crossing` finds where the curve first drops below the threshold. The `resolution` of the crossing is one over its spatial frequency, in pixels. Multiply it by the pixel size for a length.
 
-`frc_res` compares the curve with the threshold 1/7 [3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [4], or a function of the frequency for another one. It raises `frc.NoIntersectionException` if the curve does not cross the threshold. Plot `curve` against `xs` to see why.
+The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a number. If the curve never drops below the threshold, `first_crossing` returns `None`. Plotting `curve` against `plan.frequencies()` usually shows why. To find the resolution from a curve without a plan, use `frc.Rings(n).first_crossing(curve)`, which needs no Fourier transform.
 
-## The curve
+If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `plan.two_images(img1, img2)` instead of `one_image`.
 
-The FRC of ring r is
+## The FRC curve
 
-FRC(r) = Re Σ F1(f) F2(f)* / √(Σ |F1(f)|² Σ |F2(f)|²)
+For two images with Fourier transforms F₁ and F₂, the FRC at spatial frequency q is [[2]][ref2], [[5]][ref5]
 
-where F1 and F2 are the Fourier transforms of the two images and the sums run over the frequencies f of the ring [2, 5]. At low frequencies, where the object dominates both images, the FRC is near 1. At high frequencies, where independent noise dominates, it falls to about 0. The resolution is the length scale at which the curve drops below its threshold [1, 3].
+```math
+\mathrm{FRC}(q) = \frac{\mathrm{Re} \sum_{\mathbf{q} \in \text{ring}} F_1(\mathbf{q})\, F_2(\mathbf{q})^*}{\sqrt{\sum_{\mathbf{q} \in \text{ring}} |F_1(\mathbf{q})|^2 \, \sum_{\mathbf{q} \in \text{ring}} |F_2(\mathbf{q})|^2}},
+```
 
-frc computes the curve for every ring r < n / 2 of an n x n image, and puts ring r at the frequency r / n. With `rings="nearest"`, ring r holds the frequencies whose distance |f| from the origin, in pixels of the spectrum, rounds to r. With `rings="floor"`, it holds those with r <= |f| < r + 1, as DIPlib's `RadialSum` bins them.
+where the sums run over the ring of frequencies **q** at distance q from the origin. At low frequencies the object dominates both images, and the FRC is close to 1. At high frequencies the independent noise dominates, and the FRC drops to around 0. The resolution is one over the spatial frequency at which the curve crosses a threshold [[1]][ref1], [[3]][ref3].
 
-## When 1FRC applies
+For an image of n × n pixels, frc computes the FRC of the rings r = 0, 1, …, n/2 − 1, and ring r has spatial frequency r/n. With `binning="nearest"`, ring r holds the frequencies whose distance to the origin rounds to r. With `binning="floor"`, it holds the frequencies at a distance d with r ≤ d < r + 1, as in [DIPlib](https://diplib.org)'s `RadialSum`.
 
-If a pixel's count n is Poisson distributed with mean μ, the binomial split takes k from binomial(n, 1/2) and keeps n − k. Then k and n − k are independent and Poisson distributed with mean μ / 2 each [1]. The two halves are two images of the same object with independent noise, and their FRC is the 1FRC of the image.
+## When 1FRC works
 
-The split needs pixel values that are Poisson-distributed counts. Shot-noise limited cameras, such as sCMOS and EMCCD cameras, give them after offset and gain correction. Any deviation lifts the curve to a plateau above 0 at high frequencies, or lowers it below 0:
+Suppose a pixel value N is Poisson distributed with mean λ. The binomial split samples a value X from a binomial distribution with N trials and probability 1/2, and puts N − X in the second image. X and N − X are then independent and both Poisson distributed with mean λ/2 [[1]][ref1]. The two new images are therefore equivalent to two independent measurements with half the exposure, and their FRC is the 1FRC of the original image.
 
-- Readout noise, and errors in the offset or the gain, give a plateau whose height Rieger et al. derive [1, eqs. 28-32]. A gain that is a few percent off can already change the resolution. A bachelor thesis on 1FRC found the plateau 1 − μ/σ² for pixels with mean μ and variance σ² after the split [6].
-- Processing before the split does the same. Rieger et al. state: "It is imperative to split the image data in the processing pipeline when Poisson statistics applies. This is at the raw data level, after gain and offset correction." [1] A filter, a deconvolution or a reconstruction mixes the noise of pixels, and the halves of the split are no longer independent.
-- A window multiplies a count by a weight w between 0 and 1. That acts on the pixel as a gain error with g′ = w. Equation 31 of [1] then gives the plateau (w − 1) / (w + 1), which is negative. `one_frc` with a `tukey_alpha` therefore applies the window after the split.
+This only holds if the pixel values are Poisson-distributed photon counts. Cameras limited by shot noise, such as sCMOS and EMCCD cameras, give such counts after offset and gain correction. If the pixel values deviate from this, the 1FRC curve no longer drops to 0 at high frequencies, but levels off at a plateau above or below 0:
 
-## Choices that change the resolution
+- Readout noise, or an error in the offset or the gain, causes such a plateau. Rieger et al. derive its height in equations 28 to 32 of [[1]][ref1]. A gain that is a few percent off can already change the resolution. The thesis [[6]][ref6] found that the plateau lies at 1 − μ/σ², where μ is the mean and σ² the variance of a pixel after the split.
+- Any processing before the split, such as filtering, deconvolution or reconstruction, mixes the noise of neighbouring pixels. The two halves of the split are then no longer independent. Rieger et al. write: "It is imperative to split the image data in the processing pipeline when Poisson statistics applies. This is at the raw data level, after gain and offset correction." [[1]][ref1]
+- A window multiplies each count by a weight w between 0 and 1, which acts like a gain of w. By equation 31 of [[1]][ref1], the plateau is then (w − 1)/(w + 1), which is below 0. This is why `FrcPlan.one_image` applies its window after the split.
 
-Both choices below were measured on simulated images of 256 x 256 pixels, on 2026-11-14. The images held sparse points blurred by a Gaussian of 2 pixels, with Poisson noise. Each choice was compared with two independent acquisitions of half the counts each.
+## Differences from earlier versions
 
-**The window and the split.** Splitting an image that was multiplied by a Tukey window with an alpha of 1/8 lowered the FRC of nearly every ring, by 0.01 on average. The resolution came out 0.6 to 1% coarser at 10 to 200 counts per pixel. Below 1 count per pixel the error grew to a factor 2. Splitting first and windowing both halves gave the curve of the two acquisitions at every count.
+Earlier versions of frc made three choices that shift the resolution by one to a few percent. `FrcPlan`, frc-core and the Rust crate make the new choices. The legacy functions `one_frc`, `two_frc` and `frc_res` of frc keep the old choices by default, so that they reproduce earlier results. `one_frc` and `two_frc` take `binning="nearest"` for the new rings. `one_frc` applies no window, and `frc_res` always uses the band of earlier versions.
 
-**The rings.** With `rings="floor"`, the frequencies of ring r lie about half a ring above r on average, where the curve puts the ring. The resolution came out about 1% coarser than with `rings="nearest"`, whose frequencies lie around r.
+| | Earlier versions | Now | Effect of the old choice on the resolution |
+|---|---|---|---|
+| Window | applied by you, before the split | applied by `one_image` to both halves, after the split | 0.6 to 1% coarser at 10 to 200 counts per pixel, up to a factor 2 below 1 count per pixel |
+| Rings | `"floor"` | `"nearest"` | about 1% coarser |
+| Crossing | the mean frequency of a band of rings near the threshold | the first crossing, interpolated between two rings | 2 to 9% finer at 10 counts per pixel, with twice the spread between splits |
 
-**The crossing.** frc 0.1 and 0.2 took the rings whose FRC lies within 0.08 of the threshold, and returned the mean frequency of the first group of consecutive ones in which the curve crosses. That group often reaches past the first crossing, where a noisy curve comes back up. At 10 counts per pixel its resolutions were 2 to 9% finer than the interpolated first crossing, and varied twice as much between splits of one image. `crossing="first"` interpolates the first crossing.
+We measured these effects in November 2026 on simulated images of 256 × 256 pixels: sparse points blurred by a Gaussian of 2 pixels, with Poisson noise. We compared each 1FRC with the 2FRC of two independent images with half the counts each. With the window applied after the split, the 1FRC matched the 2FRC at every count level.
 
-frc 0.1 and 0.2 split the image that you had windowed, summed `"floor"` rings, and searched a band around the threshold. To keep their results, frc's `one_frc` applies no window without a `tukey_alpha`, its rings are `"floor"` unless you pass `rings="nearest"`, and `frc_res` searches the band unless you pass `crossing="first"`. It warns with a `frc.NotCountsWarning` when it splits an image that holds values that are not whole numbers, such as a windowed image. frc-core and the Rust crate apply a window, sum `"nearest"` rings, and interpolate the first crossing by default.
+With `binning="floor"`, the frequencies in ring r lie on average half a ring above r, but the curve places the ring at r. The band of rings that earlier versions averaged often reaches past the first crossing, where a noisy curve rises above the threshold again.
+
+When the legacy `one_frc` splits an image whose values are not whole numbers, such as an image that was already windowed, it warns with a `frc.NotCountsWarning`. `FrcPlan.one_image` refuses such an image.
 
 ## Packages
 
-This repository holds three software packages, released together at one version:
+This repository holds three packages, which are released together under one version number:
 
 | Package | Where | What it is |
 |---|---|---|
-| [`frc`](python/frc) | [PyPI](https://pypi.org/project/frc/) | The Python library: `one_frc`, `two_frc`, thresholds and the resolution, on NumPy arrays. |
-| [`frc-core`](python/frc-core) | [PyPI](https://pypi.org/project/frc-core/) | The compiled core of frc, without dependencies: it takes any array through the buffer protocol and returns `memoryview`s. It replaces rustfrc. |
+| [`frc`](python/frc) | [PyPI](https://pypi.org/project/frc/) | The Python library: `FrcPlan` on NumPy arrays, and the legacy functions of earlier versions. |
+| [`frc-core`](python/frc-core) | [PyPI](https://pypi.org/project/frc-core/) | The compiled core of frc, without dependencies. It takes any array that supports the buffer protocol and returns `memoryview`s. It replaces rustfrc. |
 | [`frc`](crates/frc) | [crates.io](https://crates.io/crates/frc) | The Rust library that both Python packages are built from. |
 
-`one_frc` of a 4096 x 4096 image of counts takes about 15 to 25 ms through Python, on 8 threads of an AMD EPYC 9V45 (measured on 2026-11-14). frc 0.2 took about a second.
+The 1FRC of a 4096 × 4096 image takes about 15 ms from Python with a plan, and about 25 ms with a new plan for each image, on 8 threads of an AMD EPYC 9V45 (measured in November 2026). Earlier versions of frc took about a second.
 
 ## References
 
@@ -81,9 +89,15 @@ This repository holds three software packages, released together at one version:
 3. P. B. Rosenthal and R. Henderson, "Optimal determination of particle orientation, absolute hand, and contrast loss in single-particle electron cryomicroscopy," Journal of Molecular Biology 333(4), 721-745 (2003). [doi:10.1016/j.jmb.2003.07.013](https://doi.org/10.1016/j.jmb.2003.07.013)
 4. M. van Heel and M. Schatz, "Fourier shell correlation threshold criteria," Journal of Structural Biology 151(3), 250-262 (2005). [doi:10.1016/j.jsb.2005.05.009](https://doi.org/10.1016/j.jsb.2005.05.009)
 5. M. van Heel, "Similarity measures between images," Ultramicroscopy 21(1), 95-100 (1987). [doi:10.1016/0304-3991(87)90010-6](https://doi.org/10.1016/0304-3991(87)90010-6)
-6. T. ten Brink, "Fourier Ring Correlation with a single image," bachelor thesis, Delft University of Technology (2022). [resolver.tudelft.nl](http://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a)
+6. T. ten Brink, "Fourier Ring Correlation with a single image," bachelor thesis, Delft University of Technology (2022). [resolver.tudelft.nl](https://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a)
 
-To cite frc itself, use the metadata in [`CITATION.cff`](CITATION.cff). To cite the 1FRC method, cite [1].
+To cite frc itself, use the metadata in [`CITATION.cff`](CITATION.cff). To cite the 1FRC method, cite [[1]][ref1].
+
+## History
+
+frc started in September 2021 as part of a bachelor thesis on 1FRC at Delft University of Technology [[6]][ref6]. The thesis used three packages written for it: frc for the FRC itself, [rustfrc](https://pypi.org/project/rustfrc/), an extension module in Rust for the binomial split, and [AnalyzeFRC](https://doi.org/10.5281/zenodo.6457673) for the analysis of the curves. [frc 0.1.0](https://doi.org/10.5281/zenodo.6461444) was released in April 2022 so that the thesis could cite it, and the thesis was completed in May 2022. In 2024, Rieger et al. published the 1FRC method [[1]][ref1].
+
+frc 0.1.1 added Python 3.12 in 2024. In late 2026, frc 0.1.2 to 0.2.0 brought it up to date with current versions of Python, NumPy and DIPlib. After that, the FRC computation was moved to Rust, and rustfrc was replaced by frc-core and the Rust crate frc. These now live in this repository together with frc, including the history of rustfrc. frc no longer depends on DIPlib or SciPy.
 
 ## Contributing
 
@@ -92,3 +106,10 @@ To cite frc itself, use the metadata in [`CITATION.cff`](CITATION.cff). To cite 
 ## License
 
 All three packages are licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+[ref1]: https://doi.org/10.1364/OE.524683
+[ref2]: https://doi.org/10.1038/nmeth.2448
+[ref3]: https://doi.org/10.1016/j.jmb.2003.07.013
+[ref4]: https://doi.org/10.1016/j.jsb.2005.05.009
+[ref5]: https://doi.org/10.1016/0304-3991(87)90010-6
+[ref6]: https://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a

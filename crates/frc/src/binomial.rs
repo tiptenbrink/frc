@@ -320,7 +320,7 @@ mod avx2 {
 ///
 /// The same counts, row length and seed give the same samples on every CPU, whatever `cpu`
 /// allows, and on any number of threads. For a square image they are the samples that
-/// [`FrcPlan::one_frc`](crate::FrcPlan::one_frc) draws with the same seed.
+/// [`FrcPlan::one_image`](crate::FrcPlan::one_image) draws with the same seed.
 ///
 /// # Errors
 ///

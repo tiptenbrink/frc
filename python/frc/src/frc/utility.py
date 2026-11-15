@@ -8,8 +8,9 @@ curve crosses its threshold."""
 
 import numpy as np
 
-import frc._internal_utility as _util
-from frc.deps_types import Func1D, Img, NoIntersectionException
+from frc.deps_types import Img
+# Defined with the legacy API, which uses it, and kept here as in earlier versions.
+from frc.legacy import intersection
 
 __all__ = ['gaussf', 'square_image', 'tukey_window', 'tukey_square', 'apply_tukey', 'intersection']
 
@@ -109,67 +110,9 @@ def tukey_square(length, alpha=0.125) -> np.ndarray:
 def apply_tukey(img: np.ndarray, alpha=0.125) -> np.ndarray:
     """Multiplies a square 2D image by the Tukey window of its size.
 
-    Use it on the images for two_frc. For one_frc, pass the counts and a
-    tukey_alpha instead: the window must come after the split."""
+    Use it on the images for FrcPlan.two_images or two_frc. For one image,
+    pass the counts to FrcPlan.one_image instead, which applies the window
+    after the split."""
     if img.ndim != 2 or img.shape[0] != img.shape[1]:
         raise ValueError(f"img has shape {img.shape}, but must be a square 2D image.")
     return tukey_square(img.shape[0], alpha) * img
-
-
-def intersection(xs: np.ndarray, ys1_f: np.ndarray | Func1D, ys2_f: Func1D, tol=0.08):
-    """
-    Finds the first point at which a curve crosses a second curve, such as
-    the point at which an FRC curve crosses its threshold.
-
-    The function evaluates both curves at xs. It then collects the indices
-    at which the first curve is within a tolerance of the second, the
-    indices just before the first curve crosses the second, and the indices
-    just after. The tolerance is tol times the largest value of both curves.
-    It splits these indices into groups of consecutive ones, and takes the
-    first group in which the first curve is both at or above and at or below
-    the second. The intersection is at the mean of the group's xs, which is
-    accurate if xs are evenly spaced.
-
-    The two curves do not play the same role: swapping them can give
-    another point.
-
-    :param xs: The x values of both curves.
-    :param ys1_f: The first curve, as its values at xs or as a function.
-    :param ys2_f: The second curve, as a function.
-    :param tol: The tolerance, as a fraction of the largest value of both
-    curves.
-    :return: The x of the intersection, and the value of the second curve
-    there.
-    :raises NoIntersectionException: If no group of indices holds a
-    crossing.
-    """
-    # A copy, because the first value may change below.
-    ys1 = np.array(ys1_f(xs) if callable(ys1_f) else ys1_f, dtype=np.float64)
-    ys2: np.ndarray = ys2_f(xs)
-    tolerance = tol * max(np.amax(ys1), np.amax(ys2))
-
-    close_indices = np.asarray((ys1 < ys2 + tolerance) & (ys1 > ys2 - tolerance)).nonzero()[0]
-    next_y = np.diff(ys1)
-    thres_y = (ys2 - ys1)[:-1]
-
-    # A first curve that starts on the second one starts above it instead, so
-    # that the crossings below go downwards.
-    if ys1[0] == ys2[0]:
-        ys1[0] += tolerance * 0.5
-
-    if ys1[0] > ys2[0]:
-        # The first curve comes from above: it crosses where its next step
-        # down is larger than its distance to the second curve.
-        crossings = np.asarray((next_y < thres_y) & (thres_y < 0)).nonzero()[0]
-    else:
-        crossings = np.asarray((next_y > thres_y) & (thres_y > 0)).nonzero()[0]
-
-    of_interest = np.unique(np.concatenate((close_indices, crossings, crossings + 1)))
-
-    for group in _util.separate_noncontiguous(of_interest):
-        difference: np.ndarray = ys1[group] - ys2[group]
-        if np.any(difference >= 0) and np.any(difference <= 0):
-            x = np.average(xs[group])
-            return x, ys2_f(x)
-
-    raise NoIntersectionException("the curve does not cross its threshold")
