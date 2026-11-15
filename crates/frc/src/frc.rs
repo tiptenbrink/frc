@@ -1,10 +1,10 @@
 //! Fourier ring correlation of two images, or of one image of counts split in two.
 //!
 //! Both images go through one complex FFT, of z = a + i b. For one image of counts n, a is the
-//! binomial sample k and b is n - k. With Z the spectrum of z, the spectra of the two images are
+//! binomial sample k and b is n - k, both multiplied by the window. With Z the spectrum of z, the spectra of the two images are
 //! F1(f) = (Z(f) + conj Z(-f)) / 2 and F2(f) = (Z(f) - conj Z(-f)) / 2i. The FRC at ring r is
-//! Re(sum F1 conj F2) / sqrt(sum |F1|^2 sum |F2|^2) over the frequencies f with r <= |f| < r + 1,
-//! the bins of DIPlib's `RadialSum`, for r < n / 2.
+//! Re(sum F1 conj F2) / sqrt(sum |F1|^2 sum |F2|^2) over the frequencies f of ring r, for
+//! r < n / 2. [`Rings`] says which frequencies those are.
 //!
 //! The image passes through memory twice:
 //!
@@ -30,6 +30,8 @@ use rustfft::{Fft, FftPlanner};
 use crate::binomial::{NegativeCount, Splitter, rows_per_chunk};
 use crate::cpu::CpuFeatures;
 use crate::platform;
+use crate::rings::Rings;
+use crate::window::Window;
 
 /// The sums over one ring of the spectra F1 and F2 of the two images.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -174,28 +176,43 @@ fn zeroed_spectrum(len: usize) -> Vec<Complex32> {
     spectrum
 }
 
-/// Returns the number of frequencies in each ring r < n / 2 of an n x n spectrum: those with
-/// r <= |f| < r + 1.
-pub fn ring_counts(n: usize) -> Vec<u64> {
+/// Returns the number of frequencies in each ring r < n / 2 of an n x n spectrum.
+pub fn ring_counts(n: usize, rings: Rings) -> Vec<u64> {
     let half = n / 2;
-    // |f| = a at one index for a = 0 and, for even n, a = n / 2 (frequency -n / 2), else at two.
-    let indices_with = |a: usize| -> u64 { if a == 0 || 2 * a == n { 1 } else { 2 } };
-    let mut counts = vec![0; half];
-    // By |fy| and |fx|, a quarter of the frequencies. Along |fx| the ring only grows, so a
-    // comparison follows it, without square roots.
-    for ay in 0..half {
-        let mut r = ay;
-        for ax in 0..=half {
-            while ay * ay + ax * ax >= (r + 1) * (r + 1) {
+    // A frequency with |fx| or |fy| = half lies outside every ring. Below half, |f| = a at one
+    // index for a = 0, else at two.
+    let indices_with = |a: usize| -> u64 { if a == 0 { 1 } else { 2 } };
+    // By |fy| and |fx| >= |fy|, an eighth of the frequencies; the transposed ones mirror them.
+    // Along |fx| the ring only grows, so a comparison follows it, without square roots.
+    let add_row = |mut counts: Vec<u64>, ay: usize| {
+        let mut r = rings.of_squared_radius(2 * ay * ay);
+        for ax in ay..half {
+            while ay * ay + ax * ax >= rings.first_squared_radius(r + 1) {
                 r += 1;
             }
             if r >= half {
                 break;
             }
-            counts[r] += indices_with(ay) * indices_with(ax);
+            let transposed = if ax == ay { 1 } else { 2 };
+            counts[r] += transposed * indices_with(ay) * indices_with(ax);
         }
-    }
-    counts
+        counts
+    };
+    // A plan computes the counts once, and a 4096 x 4096 plan took 5.4 ms for them on one thread
+    // of a Core Ultra 7 155H, with every quarter of the frequencies.
+    (0..half)
+        .into_par_iter()
+        .with_min_len(64)
+        .fold(|| vec![0; half], add_row)
+        .reduce(
+            || vec![0; half],
+            |mut counts, more| {
+                for (count, more) in counts.iter_mut().zip(more) {
+                    *count += more;
+                }
+                counts
+            },
+        )
 }
 
 /// The ring sums of a task of the column pass over the half plane: the frequencies with fy > 0,
@@ -270,8 +287,10 @@ fn pair_ring_terms(
 /// Adds to `sums` the ring terms of the frequencies (fx, fy) and (-fx, fy) with fy >= 1, as far
 /// as they lie in a ring r < n / 2, times `weight`. `column` is column fx of the spectrum and
 /// `mirror` column -fx.
+#[allow(clippy::too_many_arguments)]
 fn add_pair_ring_sums(
     n: usize,
+    rings: Rings,
     fx: usize,
     column: &[Complex32],
     mirror: &[Complex32],
@@ -280,8 +299,8 @@ fn add_pair_ring_sums(
     sums: &mut [[f64; 3]],
 ) {
     let half = n / 2;
-    // The rows with fx² + fy² < half².
-    let end = (half * half - fx * fx - 1).isqrt() + 1;
+    // The rows whose frequencies lie in a ring r < half: fx² + fy² below the start of ring half.
+    let end = (rings.first_squared_radius(half) - fx * fx - 1).isqrt() + 1;
     for first in (1..end).step_by(TERM_ROWS) {
         let len = TERM_ROWS.min(end - first);
         pair_ring_terms(terms, column, mirror, first..first + len, weight);
@@ -289,12 +308,12 @@ fn add_pair_ring_sums(
         // before it or in the next one, and a comparison follows the ring without a square root.
         // Whether a row enters the next ring is a choice without a branch: such a branch is
         // taken on about two rows in three, and a CPU predicts it poorly.
-        let mut ring = (fx * fx + first * first).isqrt();
+        let mut ring = rings.of_squared_radius(fx * fx + first * first);
         // The smallest fy² in the next ring.
-        let mut next_ring_at = (ring + 1) * (ring + 1) - fx * fx;
+        let mut next_ring_at = rings.first_squared_radius(ring + 1) - fx * fx;
         for i in 0..len {
             let entered = (first + i) * (first + i) >= next_ring_at;
-            let next_ring_after = next_ring_at + 2 * ring + 3;
+            let next_ring_after = next_ring_at + rings.squared_width(ring + 1);
             ring += entered as usize;
             next_ring_at = select_unpredictable(entered, next_ring_after, next_ring_at);
             for (sum, terms) in sums[ring].iter_mut().zip(&*terms) {
@@ -308,6 +327,7 @@ fn add_pair_ring_sums(
 /// holds the panel's transformed columns, the column at slot s from index `s * stride` on.
 fn add_panel_ring_sums(
     n: usize,
+    rings: Rings,
     panel: &Panel,
     columns: &[Complex32],
     stride: usize,
@@ -325,9 +345,10 @@ fn add_panel_ring_sums(
                     break;
                 }
                 let (z, mirror) = (column(pair), column(2 * pairs - 1 - pair));
-                // Row 0 is in the half plane for fx > 0 only.
+                // Row 0 is in the half plane for fx > 0 only. Frequency (fx, 0) lies in ring fx
+                // with both kinds of rings.
                 add_terms(&mut sums[fx], ring_terms(z[0], mirror[0]));
-                add_pair_ring_sums(n, fx, z, mirror, 1.0, terms, sums);
+                add_pair_ring_sums(n, rings, fx, z, mirror, 1.0, terms, sums);
             }
         }
         // Column n / 2 of an even n has |fx| = half, outside every ring.
@@ -335,7 +356,7 @@ fn add_panel_ring_sums(
             let z = column(0);
             sums[half] = origin_terms(z[0]);
             // A pair of this column with itself counts every frequency twice.
-            add_pair_ring_sums(n, 0, z, z, 0.5, terms, sums);
+            add_pair_ring_sums(n, rings, 0, z, z, 0.5, terms, sums);
         }
     }
 }
@@ -392,10 +413,11 @@ fn task_rows_of_panels<'a>(
 
 /// The FFT plan and the working memory for FRC curves of n x n images.
 ///
-/// Make one plan for a size and use it for every image of that size. A plan holds an n x n
-/// complex spectrum, 8 n² bytes.
+/// Make one plan for a size and its rings, and use it for every image of that size. A plan holds
+/// an n x n complex spectrum, 8 n² bytes.
 pub struct FrcPlan {
     n: usize,
+    rings: Rings,
     fft: Arc<dyn Fft<f32>>,
     panels: Vec<Panel>,
     ring_counts: Vec<u64>,
@@ -404,18 +426,19 @@ pub struct FrcPlan {
 }
 
 impl FrcPlan {
-    /// Creates a plan for n x n images.
+    /// Creates a plan for n x n images, whose curves sum over `rings`.
     ///
     /// # Panics
     ///
     /// Panics if n < 2.
-    pub fn new(n: usize) -> Self {
+    pub fn new(n: usize, rings: Rings) -> Self {
         assert!(n >= 2, "images of {n} x {n}, at least 2 x 2 required");
         Self {
             n,
+            rings,
             fft: FftPlanner::new().plan_fft_forward(n),
             panels: spectrum_panels(n),
-            ring_counts: ring_counts(n),
+            ring_counts: ring_counts(n, rings),
             spectrum: zeroed_spectrum(n * n),
         }
     }
@@ -423,6 +446,11 @@ impl FrcPlan {
     /// Returns the side n of the images.
     pub fn size(&self) -> usize {
         self.n
+    }
+
+    /// Returns the rings that the plan's curves sum over.
+    pub fn rings(&self) -> Rings {
+        self.rings
     }
 
     /// Returns the number of frequencies in each ring r < n / 2, as [`ring_counts`] computes
@@ -433,10 +461,17 @@ impl FrcPlan {
 
     /// Computes the FRC curve of one image of counts: its value for each ring r < n / 2.
     ///
-    /// `counts` holds the n x n image in row-major order. This method splits every count c into
-    /// a sample k of binomial(c, 1/2) and c - k, and correlates the two images that result. The
-    /// same counts and seed give the same curve: that of [`FrcPlan::two_frc`] for the samples k
-    /// that [`binom_split`](crate::binom_split) draws with the same seed, and the rest c - k.
+    /// `counts` holds the n x n image in row-major order: the counts as they were measured,
+    /// without a window. This method splits every count c into a sample k of binomial(c, 1/2)
+    /// and c - k, multiplies both images that result by `window`, and correlates them.
+    ///
+    /// The split comes before the window because it gives two independent images only of
+    /// Poisson counts, whose variance is their mean. A count that a window has scaled by w has
+    /// w times the mean and w² times the variance, and the noise of its two halves correlates.
+    ///
+    /// The same counts, window and seed give the same curve: that of [`FrcPlan::two_frc`] for
+    /// the samples k that [`binom_split`](crate::binom_split) draws with the same seed and the
+    /// rest c - k, each multiplied by the window.
     ///
     /// # Errors
     ///
@@ -444,9 +479,14 @@ impl FrcPlan {
     ///
     /// # Panics
     ///
-    /// Panics if `counts` does not hold n² counts.
-    pub fn one_frc(&mut self, counts: &[i32], seed: u64) -> Result<Vec<f64>, NegativeCount> {
-        let sums = self.one_frc_ring_sums(counts, seed)?;
+    /// Panics if `counts` does not hold n² counts, or if the alpha of a Tukey window is NaN.
+    pub fn one_frc(
+        &mut self,
+        counts: &[i32],
+        window: Window,
+        seed: u64,
+    ) -> Result<Vec<f64>, NegativeCount> {
+        let sums = self.one_frc_ring_sums(counts, window, seed)?;
         Ok(sums.iter().map(RingSums::frc).collect())
     }
 
@@ -459,19 +499,21 @@ impl FrcPlan {
     ///
     /// # Panics
     ///
-    /// Panics if `counts` does not hold n² counts.
+    /// Panics if `counts` does not hold n² counts, or if the alpha of a Tukey window is NaN.
     pub fn one_frc_ring_sums(
         &mut self,
         counts: &[i32],
+        window: Window,
         seed: u64,
     ) -> Result<Vec<RingSums>, NegativeCount> {
-        self.split_fft_rows(counts, seed)?;
+        self.split_fft_rows(counts, window, seed)?;
         Ok(self.fft_columns_ring_sums())
     }
 
     /// Computes the FRC curve of two images: its value for each ring r < n / 2.
     ///
-    /// `a` and `b` hold the n x n images in row-major order.
+    /// `a` and `b` hold the n x n images in row-major order, already multiplied by a window:
+    /// this method applies none.
     ///
     /// # Panics
     ///
@@ -504,15 +546,32 @@ impl FrcPlan {
         assert_eq!(len, n * n, "{name} holds {len} values, {n} x {n} required");
     }
 
-    /// The row pass of [`FrcPlan::one_frc`], for benchmarks: the split and the row FFTs.
+    /// The row pass of [`FrcPlan::one_frc`], for benchmarks: the split, the window and the row
+    /// FFTs.
     #[doc(hidden)]
-    pub fn split_fft_rows(&mut self, counts: &[i32], seed: u64) -> Result<(), NegativeCount> {
+    pub fn split_fft_rows(
+        &mut self,
+        counts: &[i32],
+        window: Window,
+        seed: u64,
+    ) -> Result<(), NegativeCount> {
         self.check_len("counts", counts.len());
+        let n = self.n;
         let splitter = Splitter::new(seed, CpuFeatures::Detected);
+        let taper = window.taper(n);
         self.fft_rows_of(|task, values, z| {
+            let first_row = values.start / n;
             splitter.split_chunk(task, &counts[values], z, |count, k| {
                 Complex32::new(k as f32, (count - k) as f32)
-            })
+            })?;
+            if let Some(weights) = &taper {
+                for (row, &row_weight) in z.chunks_exact_mut(n).zip(&weights[first_row..]) {
+                    for (z, &weight) in row.iter_mut().zip(weights) {
+                        *z = z.scale(row_weight * weight);
+                    }
+                }
+            }
+            Ok(())
         })
     }
 
@@ -566,7 +625,7 @@ impl FrcPlan {
     /// the row pass left.
     #[doc(hidden)]
     pub fn fft_columns_ring_sums(&self) -> Vec<RingSums> {
-        let n = self.n;
+        let (n, rings) = (self.n, self.rings);
         let (fft, spectrum) = (&self.fft, &self.spectrum);
         let stride = n + COLUMN_PAD;
         let task_sums: Vec<HalfPlaneSums> = self
@@ -589,7 +648,7 @@ impl FrcPlan {
                         for column in columns.chunks_exact_mut(stride).take(width) {
                             fft.process_with_scratch(&mut column[..n], scratch);
                         }
-                        add_panel_ring_sums(n, panel, columns, stride, terms, &mut sums);
+                        add_panel_ring_sums(n, rings, panel, columns, stride, terms, &mut sums);
                     }
                     sums
                 },
@@ -646,8 +705,8 @@ mod tests {
     ];
 
     /// Poisson counts around `mean` times one plus the cosines of `PATTERN_IMAGE_WAVES`, whose
-    /// rings (5, 19, 51 and 120, for n > 240) have an FRC near 1, while the noise elsewhere has
-    /// an FRC near 0.
+    /// rings have an FRC near 1 for n > 240, while the noise elsewhere has an FRC near 0. The
+    /// waves lie at |f| = 5.83, 19.24, 51.86 and 120.20.
     fn pattern_image(n: usize, mean: f64, seed: u64) -> Vec<i32> {
         let mut image = vec![0; n * n];
         image.par_chunks_mut(n).enumerate().for_each(|(y, row)| {
@@ -677,9 +736,16 @@ mod tests {
         }
     }
 
-    fn ring_of(fy: i64, fx: i64) -> usize {
-        ((fy * fy + fx * fx) as u64).isqrt() as usize
+    /// The ring of frequency (fx, fy) by its definition, from |f| in f64.
+    fn ring_of(rings: Rings, fy: i64, fx: i64) -> usize {
+        let radius = ((fy * fy + fx * fx) as f64).sqrt();
+        match rings {
+            Rings::Nearest => (radius + 0.5).floor() as usize,
+            Rings::Floor => radius.floor() as usize,
+        }
     }
+
+    const BOTH_RINGS: [Rings; 2] = [Rings::Nearest, Rings::Floor];
 
     /// The 2D DFT by its definition, in f64.
     fn naive_dft2(z: &[Complex64], n: usize) -> Vec<Complex64> {
@@ -702,7 +768,7 @@ mod tests {
     }
 
     /// The ring sums of two real images by their definition, over the whole plane.
-    fn naive_ring_sums(a: &[f32], b: &[f32], n: usize) -> Vec<RingSums> {
+    fn naive_ring_sums(a: &[f32], b: &[f32], n: usize, rings: Rings) -> Vec<RingSums> {
         let spectrum = |image: &[f32]| {
             let z: Vec<Complex64> = image
                 .iter()
@@ -714,7 +780,7 @@ mod tests {
         let mut sums = vec![RingSums::default(); n / 2];
         for y in 0..n {
             for x in 0..n {
-                let r = ring_of(frequency(y, n), frequency(x, n));
+                let r = ring_of(rings, frequency(y, n), frequency(x, n));
                 if r < n / 2 {
                     let (a, b) = (f1[y * n + x], f2[y * n + x]);
                     let s = &mut sums[r];
@@ -739,13 +805,16 @@ mod tests {
 
     #[test]
     fn two_frc_matches_its_definition() {
-        for n in [2, 3, 4, 5, 16, 17, 21, 24, 30, 33] {
+        for (n, rings) in [2, 3, 4, 5, 16, 17, 21, 24, 30, 33]
+            .into_iter()
+            .flat_map(|n| BOTH_RINGS.map(|rings| (n, rings)))
+        {
             let (a, b) = two_images(n);
-            let got = FrcPlan::new(n).two_frc_ring_sums(&a, &b);
-            let want = naive_ring_sums(&a, &b, n);
+            let got = FrcPlan::new(n, rings).two_frc_ring_sums(&a, &b);
+            let want = naive_ring_sums(&a, &b, n, rings);
             assert_eq!(got.len(), want.len());
             for (r, (g, w)) in got.iter().zip(&want).enumerate() {
-                assert_eq!(g.count, w.count, "n = {n}, ring {r}");
+                assert_eq!(g.count, w.count, "n = {n}, {rings:?}, ring {r}");
                 let scale = w.power1.max(w.power2);
                 for (gv, wv) in [
                     (g.correlation, w.correlation),
@@ -754,7 +823,7 @@ mod tests {
                 ] {
                     assert!(
                         (gv - wv).abs() <= 1e-5 * scale,
-                        "n = {n}, ring {r}: {gv} against {wv}"
+                        "n = {n}, {rings:?}, ring {r}: {gv} against {wv}"
                     );
                 }
             }
@@ -765,9 +834,9 @@ mod tests {
     /// the whole plane in f64 of the spectrum that rustfft computes.
     #[test]
     fn two_frc_of_large_images_matches_a_sum_over_the_whole_plane() {
-        for n in [600, 1030] {
+        for (n, rings) in [(600, Rings::Nearest), (1030, Rings::Floor)] {
             let (a, b) = two_images(n);
-            let got = FrcPlan::new(n).two_frc_ring_sums(&a, &b);
+            let got = FrcPlan::new(n, rings).two_frc_ring_sums(&a, &b);
             let fft = FftPlanner::<f32>::new().plan_fft_forward(n);
             let spectrum = |image: &[f32]| {
                 let mut z: Vec<Complex32> = image.iter().map(|&v| Complex32::new(v, 0.0)).collect();
@@ -781,7 +850,7 @@ mod tests {
             let mut want = vec![RingSums::default(); n / 2];
             for x in 0..n {
                 for y in 0..n {
-                    let r = ring_of(frequency(y, n), frequency(x, n));
+                    let r = ring_of(rings, frequency(y, n), frequency(x, n));
                     if r < n / 2 {
                         let (a, b) = (f1[x * n + y], f2[x * n + y]);
                         want[r].correlation += (a.re * b.re + a.im * b.im) as f64;
@@ -810,53 +879,73 @@ mod tests {
 
     #[test]
     fn ring_counts_match_a_direct_count() {
-        for n in (2..70).chain([255, 256, 1000]) {
+        for (n, rings) in (2..70)
+            .chain([255, 256, 1000])
+            .flat_map(|n| BOTH_RINGS.map(|rings| (n, rings)))
+        {
             let mut direct = vec![0; n / 2];
             for y in 0..n {
                 for x in 0..n {
-                    let r = ring_of(frequency(y, n), frequency(x, n));
+                    let r = ring_of(rings, frequency(y, n), frequency(x, n));
                     if r < n / 2 {
                         direct[r] += 1;
                     }
                 }
             }
-            assert_eq!(ring_counts(n), direct, "n = {n}");
+            assert_eq!(ring_counts(n, rings), direct, "n = {n}, {rings:?}");
         }
     }
 
     #[test]
-    fn one_frc_is_two_frc_of_its_halves() {
+    fn one_frc_is_two_frc_of_its_windowed_halves() {
         // 300 and 1030 take several chunks of the split, the last one shorter.
         for n in [2, 3, 17, 96, 300, 1030] {
             let counts = pattern_image(n, 60.0, 5);
             let mut samples = counts.clone();
             crate::binom_split(&mut samples, n, 13, CpuFeatures::Detected).unwrap();
-            let k: Vec<f32> = samples.iter().map(|&k| k as f32).collect();
-            let rest: Vec<f32> = counts
-                .iter()
-                .zip(&samples)
-                .map(|(count, k)| (count - k) as f32)
-                .collect();
-            let mut plan = FrcPlan::new(n);
-            assert_eq!(
-                plan.two_frc_ring_sums(&k, &rest),
-                plan.one_frc_ring_sums(&counts, 13).unwrap(),
-                "n = {n}"
-            );
+            let mut plan = FrcPlan::new(n, Rings::default());
+            for window in [Window::None, Window::default(), Window::Tukey(1.0)] {
+                let weights = window.weights(n);
+                let windowed = |half: &dyn Fn(usize) -> i32| -> Vec<f32> {
+                    (0..n * n)
+                        .map(|i| half(i) as f32 * (weights[i / n] * weights[i % n]))
+                        .collect()
+                };
+                let k = windowed(&|i| samples[i]);
+                let rest = windowed(&|i| counts[i] - samples[i]);
+                assert_eq!(
+                    plan.two_frc_ring_sums(&k, &rest),
+                    plan.one_frc_ring_sums(&counts, window, 13).unwrap(),
+                    "n = {n}, {window:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn pattern_rings_correlate() {
         let n = 512;
-        let mut plan = FrcPlan::new(n);
-        let frc = plan.one_frc(&pattern_image(n, 100.0, 2), 5).unwrap();
+        let mut plan = FrcPlan::new(n, Rings::default());
+        let image = pattern_image(n, 100.0, 2);
+        let frc = plan.one_frc(&image, Window::None, 5).unwrap();
         assert_eq!(frc[0], 1.0);
+        assert_eq!(plan.one_frc(&image, Window::default(), 5).unwrap()[0], 1.0);
         // The weakest wave, at ring 120, stands about 90 times above its ring's noise at this
         // size, and its cross terms with the noise move the FRC by a few percent.
-        for r in [5, 19, 51, 120] {
+        for (u, w, _) in PATTERN_IMAGE_WAVES {
+            let r = Rings::default().of_squared_radius((u * u + w * w) as usize);
             assert!(frc[r] > 0.9, "ring {r}: {}", frc[r]);
         }
+        // With Floor rings, the wave at |f| = 5.83 lies in ring 5 instead of ring 6.
+        let floor = FrcPlan::new(n, Rings::Floor)
+            .one_frc(&image, Window::None, 5)
+            .unwrap();
+        assert!(
+            floor[5] > 0.9 && frc[5] < 0.5,
+            "{} and {}",
+            floor[5],
+            frc[5]
+        );
         let mut noise: Vec<f64> = frc[130..].iter().map(|v| v.abs()).collect();
         noise.sort_by(f64::total_cmp);
         assert!(
@@ -875,7 +964,11 @@ mod tests {
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            pool.install(|| FrcPlan::new(n).one_frc(&counts, 3).unwrap())
+            pool.install(|| {
+                FrcPlan::new(n, Rings::default())
+                    .one_frc(&counts, Window::default(), 3)
+                    .unwrap()
+            })
         };
         let one = curve(1);
         for threads in [2, 3, 8] {
@@ -887,14 +980,19 @@ mod tests {
     fn same_seed_same_curve() {
         let n = 100;
         let counts = pattern_image(n, 30.0, 3);
-        let mut plan = FrcPlan::new(n);
+        let mut plan = FrcPlan::new(n, Rings::default());
+        let window = Window::default();
         assert_eq!(
-            plan.one_frc(&counts, 11).unwrap(),
-            plan.one_frc(&counts, 11).unwrap()
+            plan.one_frc(&counts, window, 11).unwrap(),
+            plan.one_frc(&counts, window, 11).unwrap()
         );
         assert_ne!(
-            plan.one_frc(&counts, 11).unwrap(),
-            plan.one_frc(&counts, 12).unwrap()
+            plan.one_frc(&counts, window, 11).unwrap(),
+            plan.one_frc(&counts, window, 12).unwrap()
+        );
+        assert_ne!(
+            plan.one_frc(&counts, window, 11).unwrap(),
+            plan.one_frc(&counts, Window::None, 11).unwrap()
         );
     }
 
@@ -903,6 +1001,9 @@ mod tests {
         let n = 32;
         let mut counts = pattern_image(n, 10.0, 4);
         counts[500] = -1;
-        assert_eq!(FrcPlan::new(n).one_frc(&counts, 1), Err(NegativeCount));
+        assert_eq!(
+            FrcPlan::new(n, Rings::default()).one_frc(&counts, Window::default(), 1),
+            Err(NegativeCount)
+        );
     }
 }

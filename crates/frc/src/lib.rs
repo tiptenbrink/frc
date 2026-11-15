@@ -6,6 +6,10 @@
 //! [`FrcPlan::one_frc_ring_sums`]: FrcPlan::one_frc_ring_sums
 //! [`FrcPlan::two_frc_ring_sums`]: FrcPlan::two_frc_ring_sums
 //! [`RingSums`]: RingSums
+//! [`Rings`]: Rings
+//! [`Rings::Nearest`]: Rings::Nearest
+//! [`Rings::Floor`]: Rings::Floor
+//! [`Window`]: Window
 //! [`ring_counts`]: ring_counts
 //! [`binom_split`]: binom_split
 #![doc = include_str!("../README.md")]
@@ -17,7 +21,11 @@ mod binomial;
 mod cpu;
 mod frc;
 mod platform;
+mod rings;
+mod window;
 
 pub use binomial::{NegativeCount, binom_split};
 pub use cpu::CpuFeatures;
 pub use frc::{FrcPlan, RingSums, ring_counts};
+pub use rings::Rings;
+pub use window::Window;

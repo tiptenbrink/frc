@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-__all__ = ['Img', 'Func1D', 'NoIntersectionException']
+__all__ = ['Img', 'Func1D', 'NoIntersectionException', 'NotCountsWarning']
 
 # An image is a NumPy array. Before 0.3, frc also took DIPlib images.
 Img = np.ndarray
@@ -21,3 +21,10 @@ Func1D = Callable[[np.ndarray | float], np.ndarray | float]
 
 class NoIntersectionException(ValueError):
     """The error of a curve that does not cross its threshold."""
+
+
+class NotCountsWarning(UserWarning):
+    """The warning of one_frc without a tukey_alpha for an image that holds
+    values that are not whole numbers, such as an image that was multiplied
+    by a window. To switch it off, ignore this class with the warnings
+    module."""

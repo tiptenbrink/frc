@@ -6,17 +6,21 @@ np = pytest.importorskip("numpy")
 
 
 def pattern_image(n: int, mean: float, seed: int) -> np.ndarray:
-    """Poisson counts around mean with three cosine waves, at rings 5, 19 and 51."""
+    """Poisson counts around mean with three cosine waves, at |f| = 5.83, 19.24 and 51.86: rings
+    6, 19 and 52 with "nearest" rings, and 5, 19 and 51 with "floor" rings."""
     y, x = np.mgrid[0:n, 0:n]
     waves = sum(a * np.cos(2 * np.pi * (u * x + v * y) / n) for u, v, a in [(3, 5, 0.4), (17, -9, 0.2), (40, 33, 0.1)])
     return np.random.default_rng(seed).poisson(mean * (1 + waves)).astype(np.int32)
 
 
 def test_pattern_rings_correlate():
-    frc = np.asarray(frc_core.one_frc(pattern_image(256, 100.0, 1), seed=3))
+    img = pattern_image(256, 100.0, 1)
+    frc = np.asarray(frc_core.one_frc(img, seed=3))
     assert frc.shape == (128,) and frc.dtype == np.float64
-    assert np.all(frc[[5, 19, 51]] > 0.9)
+    assert np.all(frc[[6, 19, 52]] > 0.9)
     assert np.median(np.abs(frc[60:])) < 0.1
+    floor = np.asarray(frc_core.one_frc(img, seed=3, rings="floor"))
+    assert np.all(floor[[5, 19, 51]] > 0.9)
 
 
 def test_same_seed_same_curve():
@@ -61,17 +65,49 @@ def test_two_frc_of_the_halves_of_a_split_sees_the_pattern():
     half = np.asarray(frc_core.binom_split(img, seed=9))
     curve = np.asarray(frc_core.two_frc(half, img - half))
     assert curve.shape == (32,)
-    assert np.all(curve[[5, 19]] > 0.8)
+    assert np.all(curve[[6, 19]] > 0.8)
 
 
 @pytest.mark.parametrize("n", [64, 300, 1030])
 def test_one_frc_is_two_frc_of_the_halves_that_binom_split_makes(n):
     img = pattern_image(n, 50.0, 7)
     half = np.asarray(frc_core.binom_split(img, seed=11))
-    assert frc_core.one_frc(img, seed=11) == frc_core.two_frc(half, img - half)
+    assert frc_core.one_frc(img, seed=11, tukey_alpha=0) == frc_core.two_frc(half, img - half)
     # Another element type and a view with strides hold the same image.
     assert np.array_equal(frc_core.binom_split(img.astype(np.uint16), seed=11), half)
     assert np.array_equal(frc_core.binom_split(img.T, seed=11), frc_core.binom_split(np.ascontiguousarray(img.T), seed=11))
+
+
+def tukey_square(n: int, alpha: float) -> np.ndarray:
+    """The window of scipy.signal.windows.tukey(n, alpha) along both axes, for alpha < 1."""
+    from_edge = np.minimum(np.arange(n), n - 1 - np.arange(n))
+    rise = alpha * (n - 1) / 2
+    window = np.where(from_edge <= np.floor(rise), 0.5 * (1 - np.cos(np.pi * from_edge / rise)), 1.0)
+    return np.outer(window, window)
+
+
+@pytest.mark.parametrize(("n", "alpha"), [(64, 0.125), (101, 0.125), (300, 0.5)])
+def test_one_frc_windows_both_halves_after_the_split(n, alpha):
+    img = pattern_image(n, 50.0, 8)
+    half = np.asarray(frc_core.binom_split(img, seed=12))
+    window = tukey_square(n, alpha)
+    want = np.asarray(frc_core.two_frc(window * half, window * (img - half)))
+    # one_frc multiplies in float32.
+    assert np.allclose(frc_core.one_frc(img, seed=12, tukey_alpha=alpha), want, atol=1e-5)
+    assert np.allclose(frc_core.FrcPlan(n).one_frc(img, seed=12, tukey_alpha=alpha), want, atol=1e-5)
+    assert not np.allclose(frc_core.one_frc(img, seed=12, tukey_alpha=0), want, atol=1e-5)
+
+
+def test_the_default_window_is_a_tukey_window_with_an_alpha_of_an_eighth():
+    img = pattern_image(64, 50.0, 9)
+    assert frc_core.one_frc(img, seed=1) == frc_core.one_frc(img, seed=1, tukey_alpha=0.125)
+    assert frc_core.one_frc(img, seed=1) != frc_core.one_frc(img, seed=1, tukey_alpha=0)
+
+
+@pytest.mark.parametrize("alpha", [-0.1, 1.5, float("nan")])
+def test_alphas_outside_zero_to_one_are_refused(alpha):
+    with pytest.raises(ValueError, match="tukey_alpha"):
+        frc_core.one_frc(np.ones((8, 8), dtype=np.int32), tukey_alpha=alpha)
 
 
 def test_two_frc_of_an_image_with_itself_is_one():
@@ -93,11 +129,36 @@ def test_binom_split_keeps_the_shape_and_halves_the_mean():
     assert odd.shape == (7,) and odd.dtype == np.int32 and np.all(odd <= 9)
 
 
-def test_ring_counts_cover_the_disk():
-    counts = np.asarray(frc_core.FrcPlan(16).ring_counts())
-    assert counts[0] == 1 and counts[1] == 8
-    assert counts.sum() == sum(1 for fy in range(-8, 8) for fx in range(-8, 8) if int((fx * fx + fy * fy) ** 0.5) < 8)
-    assert frc_core.ring_counts(16) == frc_core.FrcPlan(16).ring_counts()
+@pytest.mark.parametrize(("rings", "ring_of"), [("nearest", lambda r: int(r + 0.5)), ("floor", int)])
+def test_ring_counts_cover_the_disk(rings, ring_of):
+    plan = frc_core.FrcPlan(16, rings)
+    assert plan.rings == rings
+    counts = np.asarray(plan.ring_counts())
+    want = np.zeros(8, dtype=np.uint64)
+    for fy in range(-8, 8):
+        for fx in range(-8, 8):
+            r = ring_of((fx * fx + fy * fy) ** 0.5)
+            if r < 8:
+                want[r] += 1
+    assert counts.tolist() == want.tolist()
+    assert frc_core.ring_counts(16, rings) == plan.ring_counts()
+
+
+def test_the_default_rings_are_nearest():
+    assert frc_core.FrcPlan(16).rings == "nearest"
+    assert frc_core.ring_counts(16) == frc_core.ring_counts(16, "nearest") != frc_core.ring_counts(16, "floor")
+    img = pattern_image(64, 50.0, 10)
+    assert frc_core.one_frc(img, seed=1) == frc_core.one_frc(img, seed=1, rings="nearest")
+    assert frc_core.one_frc(img, seed=1, rings="floor") == frc_core.FrcPlan(64, "floor").one_frc(img, seed=1)
+    floats = img.astype(np.float32)
+    assert frc_core.two_frc(floats, floats[::-1], rings="floor") == frc_core.FrcPlan(64, "floor").two_frc(floats, floats[::-1])
+
+
+def test_unknown_rings_are_refused():
+    with pytest.raises(ValueError, match="rings"):
+        frc_core.FrcPlan(16, "round")
+    with pytest.raises(ValueError, match="rings"):
+        frc_core.ring_counts(16, "Nearest")
 
 
 @pytest.mark.parametrize("shape", [(8, 9), (8,), (2, 2, 2), (1, 1)])

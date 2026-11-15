@@ -6,7 +6,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use frc::{CpuFeatures, FrcPlan, binom_split};
+use frc::{CpuFeatures, FrcPlan, Rings, Window, binom_split};
 use rand::SeedableRng;
 use rand_distr::{Distribution, Poisson};
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -50,10 +50,13 @@ fn frc(c: &mut Criterion) {
     for n in [1024, 2048, 4000, 4096, 8192] {
         let image = image(n);
         let floats: Vec<f32> = image.iter().map(|&v| v as f32).collect();
-        let mut plan = FrcPlan::new(n);
+        let mut plan = FrcPlan::new(n, Rings::default());
         group.throughput(Throughput::Elements((n * n) as u64));
         group.bench_function(BenchmarkId::new("one_frc", n), |b| {
-            b.iter(|| plan.one_frc(black_box(&image), SEED).unwrap())
+            b.iter(|| {
+                plan.one_frc(black_box(&image), Window::default(), SEED)
+                    .unwrap()
+            })
         });
         group.bench_function(BenchmarkId::new("two_frc", n), |b| {
             b.iter(|| plan.two_frc(black_box(&floats), black_box(&floats)))
@@ -65,11 +68,14 @@ fn frc(c: &mut Criterion) {
 fn steps(c: &mut Criterion) {
     let n = 4096;
     let image = image(n);
-    let mut plan = FrcPlan::new(n);
-    plan.one_frc(&image, SEED).unwrap();
+    let mut plan = FrcPlan::new(n, Rings::default());
+    plan.one_frc(&image, Window::default(), SEED).unwrap();
     let mut group = c.benchmark_group("one_frc_steps_4096");
     group.bench_function("split_fft_rows", |b| {
-        b.iter(|| plan.split_fft_rows(black_box(&image), SEED).unwrap())
+        b.iter(|| {
+            plan.split_fft_rows(black_box(&image), Window::default(), SEED)
+                .unwrap()
+        })
     });
     group.bench_function("fft_columns_ring_sums", |b| {
         b.iter(|| plan.fft_columns_ring_sums())

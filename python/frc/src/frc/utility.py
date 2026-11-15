@@ -107,7 +107,10 @@ def tukey_square(length, alpha=0.125) -> np.ndarray:
 
 
 def apply_tukey(img: np.ndarray, alpha=0.125) -> np.ndarray:
-    """Multiplies a square 2D image by the Tukey window of its size."""
+    """Multiplies a square 2D image by the Tukey window of its size.
+
+    Use it on the images for two_frc. For one_frc, pass the counts and a
+    tukey_alpha instead: the window must come after the split."""
     if img.ndim != 2 or img.shape[0] != img.shape[1]:
         raise ValueError(f"img has shape {img.shape}, but must be a square 2D image.")
     return tukey_square(img.shape[0], alpha) * img
