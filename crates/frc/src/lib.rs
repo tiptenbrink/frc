@@ -9,6 +9,9 @@
 //! [`Rings`]: Rings
 //! [`Rings::Nearest`]: Rings::Nearest
 //! [`Rings::Floor`]: Rings::Floor
+//! [`Threshold`]: Threshold
+//! [`first_crossing`]: first_crossing
+//! [`Crossing::resolution`]: Crossing::resolution
 //! [`Window`]: Window
 //! [`ring_counts`]: ring_counts
 //! [`binom_split`]: binom_split
@@ -22,10 +25,12 @@ mod cpu;
 mod frc;
 mod platform;
 mod rings;
+mod threshold;
 mod window;
 
 pub use binomial::{NegativeCount, binom_split};
 pub use cpu::CpuFeatures;
 pub use frc::{FrcPlan, RingSums, ring_counts};
 pub use rings::Rings;
+pub use threshold::{Crossing, Threshold, first_crossing};
 pub use window::Window;

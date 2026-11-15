@@ -145,6 +145,37 @@ def test_the_half_bit_threshold_follows_the_rings():
     assert np.array_equal(threshold(xs), nearest)
 
 
+@pytest.mark.parametrize("crossing", ["band", "first"])
+def test_the_half_bit_resolution_does_not_depend_on_the_unit_of_xs(crossing):
+    n = 128
+    curve = frc.one_frc(pattern_image(n, 30.0, 10), seed=4, tukey_alpha=0.125, rings="nearest")
+    xs = np.arange(len(curve)) / n
+    for threshold in ("1/7", "half_bit"):
+        in_pixels = frc.frc_res(xs, curve, n, threshold, rings="nearest", crossing=crossing)
+        # Pixels of 30 nm: xs in cycles per nm, and a resolution in nm.
+        in_nm = frc.frc_res(xs / 30, curve, n, threshold, rings="nearest", crossing=crossing)
+        assert in_nm[0] == pytest.approx(30 * in_pixels[0])
+        assert in_nm[1] == pytest.approx(in_pixels[1])
+        assert np.allclose(in_nm[2](xs / 30), in_pixels[2](xs))
+
+
+def test_the_first_crossing_is_frc_cores():
+    n = 128
+    curve = frc.one_frc(pattern_image(n, 30.0, 11), seed=5, tukey_alpha=0.125, rings="nearest")
+    xs = np.arange(len(curve)) / n
+    for threshold in ("1/7", "half_bit"):
+        resolution, y, _ = frc.frc_res(xs, curve, n, threshold, rings="nearest", crossing="first")
+        want = frc_core.resolution(curve, n, threshold, "nearest")
+        assert resolution == pytest.approx(want[0]) and y == pytest.approx(want[1])
+    # A function of the frequency serves as a threshold too.
+    resolution, y, _ = frc.frc_res(xs, curve, n, lambda x: 0.2 + 0 * x, crossing="first")
+    assert resolution == pytest.approx(frc_core.resolution(curve, n, 0.2)[0]) and y == pytest.approx(0.2)
+    with pytest.raises(frc.NoIntersectionException):
+        frc.frc_res(xs, curve, n, lambda x: -1 + 0 * x, crossing="first")
+    with pytest.raises(ValueError, match="crossing"):
+        frc.frc_res(xs, curve, n, crossing="last")
+
+
 def test_two_frc_of_an_image_with_itself_is_one():
     img = frc.util.apply_tukey(pattern_image(32, 50.0, 4).astype(np.float64))
     assert np.allclose(frc.two_frc(img, img), 1.0)

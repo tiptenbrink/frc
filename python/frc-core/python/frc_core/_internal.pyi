@@ -61,6 +61,21 @@ def ring_counts(n: int, rings: Rings = "nearest") -> memoryview:
     frequencies f in ring r. rings says which frequencies those are, as for one_frc.
     """
 
+def resolution(
+    curve: Buffer, n: int, threshold: str | float = "1/7", rings: Rings = "nearest"
+) -> tuple[float, float] | None:
+    """Computes the resolution of an n x n image from its FRC curve.
+
+    Finds the first ring i whose FRC is below the threshold, and draws a straight line through
+    the FRC minus the threshold at rings i - 1 and i. The crossing is where the line is zero,
+    at a ring position c between i - 1 and i. Returns the resolution n / c in pixels, and the
+    threshold at the crossing, or None if the curve does not drop below the threshold.
+
+    curve holds the FRC of ring r at index r, as one_frc and two_frc return it. threshold is
+    "1/7", "half_bit" for the 1/2-bit threshold, which depends on the number of frequencies in
+    each ring, or a float. rings are the rings that the curve was computed with.
+    """
+
 class FrcPlan:
     """The FFT plan and the working memory for FRC curves of n x n images.
 
@@ -78,6 +93,8 @@ class FrcPlan:
         """The rings that the plan's curves sum over: "nearest" or "floor"."""
     def ring_counts(self) -> memoryview:
         """Counts the frequencies in each ring r < n / 2, as ring_counts(n, rings) does."""
+    def resolution(self, curve: Buffer, threshold: str | float = "1/7") -> tuple[float, float] | None:
+        """Computes the resolution from a curve of this plan, as the function resolution does."""
     def one_frc(self, img: Buffer, seed: int | None = None, tukey_alpha: float = 0.125) -> memoryview:
         """Computes the FRC curve of an n x n image of counts, as the function one_frc does."""
     def two_frc(self, img1: Buffer, img2: Buffer) -> memoryview:

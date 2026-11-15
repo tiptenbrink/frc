@@ -5,6 +5,6 @@ such as a NumPy array, an ``array.array`` or a ``memoryview``, and return a ``me
 which ``numpy.asarray`` wraps without copying it.
 """
 
-from ._internal import FrcPlan, binom_split, one_frc, ring_counts, two_frc
+from ._internal import FrcPlan, binom_split, one_frc, resolution, ring_counts, two_frc
 
-__all__ = ["FrcPlan", "binom_split", "one_frc", "ring_counts", "two_frc"]
+__all__ = ["FrcPlan", "binom_split", "one_frc", "resolution", "ring_counts", "two_frc"]

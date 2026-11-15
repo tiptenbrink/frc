@@ -20,6 +20,7 @@ fn internal_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(one_frc, m)?)?;
     m.add_function(wrap_pyfunction!(two_frc, m)?)?;
     m.add_function(wrap_pyfunction!(ring_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(resolution, m)?)?;
     m.add_class::<FrcPlanPy>()?;
     Ok(())
 }
@@ -69,6 +70,44 @@ fn rings_name(rings: frc::Rings) -> &'static str {
         frc::Rings::Nearest => "nearest",
         frc::Rings::Floor => "floor",
     }
+}
+
+/// Returns the threshold that `threshold` names: "1/7", the default, "half_bit", or a float.
+fn threshold_of(threshold: Option<&Bound<'_, PyAny>>) -> PyResult<frc::Threshold> {
+    let Some(threshold) = threshold else {
+        return Ok(frc::Threshold::OneSeventh);
+    };
+    if let Ok(name) = threshold.extract::<&str>() {
+        return match name {
+            "1/7" => Ok(frc::Threshold::OneSeventh),
+            "half_bit" => Ok(frc::Threshold::HalfBit),
+            _ => Err(PyValueError::new_err(format!(
+                "threshold is {name:?}, but must be '1/7', 'half_bit' or a float"
+            ))),
+        };
+    }
+    Ok(frc::Threshold::Fixed(threshold.extract::<f64>()?))
+}
+
+/// Returns the resolution of an n x n image in pixels, and the threshold at the crossing, from
+/// its curve and its ring counts. Returns `None` if the curve does not cross the threshold.
+fn curve_resolution(
+    curve: &Bound<'_, PyAny>,
+    n: usize,
+    ring_counts: &[u64],
+    threshold: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<(f64, f64)>> {
+    let threshold = threshold_of(threshold)?;
+    let values = InputBuffer::get(curve, "curve")?.curve()?;
+    if values.len() > ring_counts.len() {
+        return Err(PyValueError::new_err(format!(
+            "curve holds {} values, but an image of {n} x {n} has {} rings",
+            values.len(),
+            ring_counts.len()
+        )));
+    }
+    Ok(frc::first_crossing(&values, ring_counts, threshold)
+        .map(|crossing| (crossing.resolution(n), crossing.threshold)))
 }
 
 /// Returns `values` as a `memoryview` of one dimension.
@@ -182,6 +221,29 @@ fn ring_counts<'py>(py: Python<'py>, n: usize, rings: &str) -> PyResult<Bound<'p
     memoryview_of(py, &frc::ring_counts(n, rings_named(rings)?))
 }
 
+/// Computes the resolution of an n x n image from its FRC curve.
+///
+/// Finds the first ring i whose FRC is below the threshold, and draws a straight line through
+/// the FRC minus the threshold at rings i - 1 and i. The crossing is where the line is zero,
+/// at a ring position c between i - 1 and i. Returns the resolution n / c in pixels, and the
+/// threshold at the crossing, or None if the curve does not drop below the threshold.
+///
+/// curve holds the FRC of ring r at index r, as one_frc and two_frc return it. threshold is
+/// "1/7", "half_bit" for the 1/2-bit threshold, which depends on the number of frequencies in
+/// each ring, or a float. rings are the rings that the curve was computed with.
+#[pyfunction]
+#[pyo3(signature = (curve, n, threshold=None, rings="nearest"))]
+fn resolution(
+    curve: &Bound<'_, PyAny>,
+    n: usize,
+    threshold: Option<&Bound<'_, PyAny>>,
+    rings: &str,
+) -> PyResult<Option<(f64, f64)>> {
+    check_size(n)?;
+    let counts = frc::ring_counts(n, rings_named(rings)?);
+    curve_resolution(curve, n, &counts, threshold)
+}
+
 /// The FFT plan and the working memory for FRC curves of n x n images.
 ///
 /// Make one plan for a size and its rings, "nearest" or "floor" as for one_frc, and use it for
@@ -243,6 +305,17 @@ impl FrcPlanPy {
     /// Counts the frequencies in each ring r < n / 2, as ring_counts(n, rings) does.
     fn ring_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ring_counts(py, self.size, rings_name(self.rings))
+    }
+
+    /// Computes the resolution from a curve of this plan, as the function resolution does.
+    #[pyo3(signature = (curve, threshold=None))]
+    fn resolution(
+        &self,
+        curve: &Bound<'_, PyAny>,
+        threshold: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Option<(f64, f64)>> {
+        let counts = self.locked_plan().ring_counts().to_vec();
+        curve_resolution(curve, self.size, &counts, threshold)
     }
 
     /// Computes the FRC curve of an n x n image of counts, as the function one_frc does.

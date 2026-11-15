@@ -281,6 +281,29 @@ impl InputBuffer {
         })
     }
 
+    /// Returns the values of a curve: the elements of a 1D buffer of floats, as float64s.
+    pub fn curve(&self) -> PyResult<Vec<f64>> {
+        if self.shape().len() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "{} must be a 1D curve, not of shape {:?}",
+                self.name,
+                self.shape()
+            )));
+        }
+        let mut out = vec![0f64; self.buffer.item_count()];
+        match self.element {
+            Element::F64 => self.convert_into(&mut out, |v: f64| v),
+            Element::F32 => self.convert_into(&mut out, |v: f32| v as f64),
+            _ => {
+                return Err(PyTypeError::new_err(format!(
+                    "{} must hold floats, as one_frc and two_frc return them",
+                    self.name
+                )));
+            }
+        }
+        Ok(out)
+    }
+
     /// Returns the elements as float32s, in row-major order. Borrows them if the buffer already
     /// holds contiguous float32s.
     pub fn floats(&self) -> Cow<'_, [f32]> {

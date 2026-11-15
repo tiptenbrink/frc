@@ -5,6 +5,7 @@
 #                                   TU Delft
 # Tip ten Brink
 
+import functools
 import warnings
 
 import frc_core
@@ -12,7 +13,7 @@ import numpy as np
 
 import frc._internal_utility as _util
 import frc.utility as frc_util
-from frc.deps_types import Func1D, Img, NotCountsWarning
+from frc.deps_types import Func1D, Img, NoIntersectionException, NotCountsWarning
 
 __all__ = ['one_frc', 'two_frc', 'frc_res']
 
@@ -144,6 +145,26 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
     return np.asarray(frc_core.two_frc(*halves, rings))
 
 
+@functools.cache
+def _half_bit_thresholds(ring_count: int, rings: str) -> np.ndarray:
+    """Returns the 1/2-bit threshold of each of the first ring_count rings."""
+    # A spectrum of twice the size holds all of these rings whole.
+    ring_sizes = np.asarray(frc_core.ring_counts(2 * ring_count, rings), dtype=np.float64)
+    ring_sizes_sqrt = np.sqrt(ring_sizes)
+    snr_half_set = 0.5 * np.sqrt(2) - 0.5
+    factor = np.sqrt(snr_half_set) * 2
+    thresholds = (snr_half_set * ring_sizes_sqrt + (factor + 1)) / ((snr_half_set + 1) * ring_sizes_sqrt + factor)
+    thresholds.setflags(write=False)
+    return thresholds
+
+
+def _ring_of(x, first: float, step: float) -> np.ndarray:
+    """Returns the ring of each frequency x, for rings at first, first + step, and so on."""
+    # The small addition keeps a ring's own frequency, which a float may hold a little below
+    # it, in that ring.
+    return np.floor((np.asarray(x) - first) / step + 1e-9).astype(int)
+
+
 def half_bit_threshold(img_size: int, rings: str = "floor") -> Func1D:
     """
     Makes the 1/2-bit threshold curve of the FRC of a square image.
@@ -160,50 +181,74 @@ def half_bit_threshold(img_size: int, rings: str = "floor") -> Func1D:
     x * img_size pixels from the origin, for x from 0 up to, but not
     including, 1.
     """
-    # The number of frequencies in each ring up to img_size pixels from the
-    # origin. A spectrum of twice the size holds all of these rings whole.
-    ring_sizes = np.asarray(frc_core.ring_counts(img_size * 2, rings))[:img_size].astype(np.float64)
-    ring_sizes_sqrt = np.sqrt(ring_sizes)
-
-    snr_half_set = 0.5 * np.sqrt(2) - 0.5
-    factor = np.sqrt(snr_half_set) * 2
-    thresholds = (snr_half_set * ring_sizes_sqrt + (factor + 1)) / ((snr_half_set + 1) * ring_sizes_sqrt + factor)
+    thresholds = _half_bit_thresholds(img_size, rings)
 
     def threshold_at(x):
-        return thresholds[np.array(x * img_size).astype(int)]
+        return thresholds[_ring_of(x, 0.0, 1 / img_size)]
 
     return threshold_at
 
 
 def frc_res(xs: np.ndarray, frc_curve: np.ndarray, img_size: int,
-            threshold: str | Func1D | None = None, rings: str = "floor") -> tuple[float, float, Func1D]:
+            threshold: str | Func1D | None = None, rings: str = "floor",
+            crossing: str = "band") -> tuple[float, float, Func1D]:
     """
     Computes the resolution from an FRC curve: one over the frequency at
     which the curve crosses its threshold.
 
-    :param xs: The frequency of each value of the curve.
-    :param frc_curve: The FRC curve, as one_frc and two_frc return it.
+    With crossing="first", frc_res finds the first ring i whose FRC is
+    below its threshold. It draws a straight line through the FRC minus the
+    threshold at rings i - 1 and i, and takes the frequency at which the
+    line is zero. With crossing="band", the default, it collects the rings
+    whose FRC lies within 0.08 of the threshold, and takes the mean
+    frequency of the first group of consecutive ones in which the curve
+    crosses, as frc 0.1 and 0.2 did. That group often reaches past the
+    first crossing, and in a simulation it gave resolutions 2 to 9% finer
+    than the first crossing, with twice its spread between splits.
+
+    :param xs: The frequency of each value of the curve, in any unit:
+    xs[r] for ring r. The resolution comes out in the reciprocal unit.
     :param img_size: The side of the square image, in pixels.
     :param threshold: '1/7', the default, for a threshold of 1/7,
     'half_bit' for the 1/2-bit threshold curve, or a function that maps
     the frequencies to their thresholds.
     :param rings: The rings of the curve, 'floor' or 'nearest', as one_frc
     and two_frc took them. The half-bit threshold depends on them.
+    :param crossing: 'band', the default, or 'first'.
     :return: The resolution, the value of the threshold where the curve
     crosses it, and the threshold as a function.
     :raises NoIntersectionException: If the curve does not cross the
     threshold.
     """
+    xs = np.asarray(xs, dtype=np.float64)
+    if crossing not in ("band", "first"):
+        raise ValueError(f"crossing is {crossing!r}, but must be 'band' or 'first'.")
     if threshold is None or threshold == '1/7':
         def threshold_f(x):
             return x * 0 + 1. / 7
     elif threshold == 'half_bit':
-        threshold_f = half_bit_threshold(img_size, rings)
+        # Value r of the curve belongs to ring r, at xs[r], in whatever unit xs has.
+        thresholds = _half_bit_thresholds(img_size, rings)
+        step = xs[1] - xs[0] if len(xs) > 1 else 1 / img_size
+
+        def threshold_f(x):
+            return thresholds[_ring_of(x, xs[0], step)]
     elif callable(threshold):
         threshold_f = threshold
     else:
         raise ValueError(f"threshold is {threshold!r}, but must be '1/7', 'half_bit' or a function.")
 
-    intersect_x, intersect_y = frc_util.intersection(xs, frc_curve, threshold_f)
+    if crossing == "band":
+        intersect_x, intersect_y = frc_util.intersection(xs, frc_curve, threshold_f)
+        return 1. / intersect_x, intersect_y, threshold_f
 
-    return 1. / intersect_x, intersect_y, threshold_f
+    curve = np.asarray(frc_curve, dtype=np.float64)
+    ring_thresholds = np.broadcast_to(np.asarray(threshold_f(xs), dtype=np.float64), curve.shape)
+    # The curve crosses its threshold where the curve minus the threshold crosses 0.
+    found = frc_core.resolution(curve - ring_thresholds, img_size, 0.0, rings)
+    if found is None:
+        raise NoIntersectionException("the curve does not cross its threshold")
+    ring = img_size / found[0]
+    rings_of_xs = np.arange(len(xs))
+    intersect_x = np.interp(ring, rings_of_xs, xs)
+    return 1. / intersect_x, float(np.interp(ring, rings_of_xs, ring_thresholds)), threshold_f

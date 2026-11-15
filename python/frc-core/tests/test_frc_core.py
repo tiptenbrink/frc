@@ -154,6 +154,42 @@ def test_the_default_rings_are_nearest():
     assert frc_core.two_frc(floats, floats[::-1], rings="floor") == frc_core.FrcPlan(64, "floor").two_frc(floats, floats[::-1])
 
 
+def test_resolution_interpolates_the_first_crossing():
+    curve = np.array([1.0, 0.6, 0.3, 0.2, 0.1, 0.2])
+    # Between ring 3 at 0.2 and ring 4 at 0.1, the curve crosses 0.15 at ring 3.5.
+    assert frc_core.resolution(curve, 12, 0.15) == (12 / 3.5, 0.15)
+    resolution, threshold = frc_core.resolution(curve, 12)
+    assert threshold == 1 / 7 and resolution == pytest.approx(12 / (3 + (0.2 - 1 / 7) / 0.1))
+    assert frc_core.resolution(curve, 12, 0.05) is None
+    assert frc_core.resolution(memoryview(curve.astype(np.float32)), 12, 0.15)[0] == pytest.approx(12 / 3.5)
+
+
+def test_resolution_of_a_plan_uses_its_rings():
+    img = pattern_image(128, 40.0, 11)
+    for rings in ("nearest", "floor"):
+        plan = frc_core.FrcPlan(128, rings)
+        curve = plan.one_frc(img, seed=2)
+        for threshold in ("1/7", "half_bit", 0.5):
+            assert plan.resolution(curve, threshold) == frc_core.resolution(curve, 128, threshold, rings)
+    # The 1/2-bit threshold depends on the number of frequencies in each ring.
+    curve = np.linspace(1.0, 0.0, 64)
+    assert frc_core.resolution(curve, 128, "half_bit", "nearest") != frc_core.resolution(curve, 128, "half_bit", "floor")
+    # The threshold of ring 0, which holds the origin alone, is exactly 1, the FRC there.
+    assert frc_core.resolution(curve, 128, 1.0) == (float("inf"), 1.0)
+
+
+def test_bad_resolution_arguments_are_refused():
+    curve = np.linspace(1.0, 0.0, 8)
+    with pytest.raises(ValueError, match="threshold"):
+        frc_core.resolution(curve, 16, "1/8")
+    with pytest.raises(ValueError, match="rings"):
+        frc_core.resolution(curve, 14)
+    with pytest.raises(TypeError, match="floats"):
+        frc_core.resolution(np.arange(8), 16)
+    with pytest.raises(ValueError, match="1D"):
+        frc_core.resolution(np.ones((2, 4)), 16)
+
+
 def test_unknown_rings_are_refused():
     with pytest.raises(ValueError, match="rings"):
         frc_core.FrcPlan(16, "round")
