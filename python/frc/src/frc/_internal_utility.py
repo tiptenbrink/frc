@@ -20,6 +20,16 @@ def are_sizes_equal(arrs: list[np.ndarray], check_equal_axes=True) -> bool:
     return same_shape and (not check_equal_axes or are_axes_equal(arrs[0]))
 
 
+def counts_of(img: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Returns img as counts: img itself if it holds integers, and otherwise
+    its values truncated to int32. Also returns whether img holds whole
+    numbers only, so that the counts equal img."""
+    if np.issubdtype(img.dtype, np.integer):
+        return img, True
+    counts = img.astype(np.int32)
+    return counts, np.array_equal(counts, img)
+
+
 def separate_noncontiguous(a: np.ndarray) -> list[np.ndarray]:
     """Splits a sorted array of integers into runs of consecutive ones."""
     run_starts = np.asarray(np.diff(a) > 1).nonzero()[0] + 1

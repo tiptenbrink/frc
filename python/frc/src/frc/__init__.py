@@ -5,4 +5,5 @@
 
 from frc.deps_types import *
 from frc.frc_functions import *
+from frc.plan import *
 import frc.utility as util

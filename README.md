@@ -10,7 +10,7 @@ Install the Python library frc. In a project managed by [uv](https://docs.astral
 
 1. Convert the image to photon counts: subtract the camera offset, divide by the gain and round to whole numbers. Do not process the image any further before the split, not even with a window.
 2. Crop the image to a square.
-3. Compute the 1FRC curve with `frc.one_frc`, and the resolution with `frc.frc_res`.
+3. Make an `frc.FrcPlan` for the size of the image, and compute the 1FRC curve and the resolution with it. Use the same plan for every image of that size.
 
 ```python
 import numpy as np
@@ -20,18 +20,17 @@ import frc
 counts = np.clip(np.rint((raw - offset) / gain), 0, None).astype(np.int32)
 counts = frc.util.square_image(counts, add_padding=False)
 
-curve = frc.one_frc(counts, tukey_alpha=0.125, rings="nearest")
-n = counts.shape[0]
-xs = np.arange(len(curve)) / n  # spatial frequency of each ring, in 1/pixel
-resolution, _, _ = frc.frc_res(xs, curve, n, rings="nearest", crossing="first")
+plan = frc.FrcPlan(counts.shape[0])
+curve = plan.one_frc(counts)
+resolution = plan.resolution(curve)
 print(f"resolution: {resolution:.2f} pixels")
 ```
 
-`one_frc` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) with parameter α = `tukey_alpha` to both halves. `frc_res` finds where the curve first drops below the threshold and returns one over that spatial frequency. To get the resolution in nanometres, give `xs` in 1/nm, or multiply the result by the pixel size.
+`one_frc` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) to both halves. `resolution` finds where the curve first drops below the threshold and returns one over that spatial frequency, in pixels. Multiply it by the pixel size for a length.
 
-The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a function of the spatial frequency for any other threshold. If the curve never drops below the threshold, `frc_res` raises `frc.NoIntersectionException`. Plotting `curve` against `xs` usually shows why.
+The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a number. If the curve never drops below the threshold, `resolution` raises `frc.NoIntersectionException`. Plotting `curve` against `plan.frequencies()` usually shows why.
 
-If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `frc.two_frc(img1, img2, rings="nearest")` instead of `one_frc`.
+If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `plan.two_frc(img1, img2)` instead of `one_frc`.
 
 ## The FRC curve
 
@@ -57,19 +56,19 @@ This only holds if the pixel values are Poisson-distributed photon counts. Camer
 
 ## Differences from earlier versions
 
-Earlier versions of frc made three choices that shift the resolution by one to a few percent. frc still makes these choices by default, so that it reproduces earlier results. frc-core and the Rust crate make the new choices by default.
+Earlier versions of frc made three choices that shift the resolution by one to a few percent. `FrcPlan`, frc-core and the Rust crate make the new choices. The legacy functions `one_frc`, `two_frc` and `frc_res` of frc keep the old choices by default, so that they reproduce earlier results. They make the new choices with `tukey_alpha`, `rings="nearest"` and `crossing="first"`.
 
 | | Earlier versions | Now | Effect of the old choice on the resolution |
 |---|---|---|---|
-| Window | applied by you, before the split | applied by `one_frc` to both halves, after the split (`tukey_alpha`) | 0.6 to 1% coarser at 10 to 200 counts per pixel, up to a factor 2 below 1 count per pixel |
-| Rings | `rings="floor"` | `rings="nearest"` | about 1% coarser |
-| Crossing | `crossing="band"`: the mean frequency of the rings near the threshold | `crossing="first"`: the first crossing, interpolated between two rings | 2 to 9% finer at 10 counts per pixel, with twice the spread between splits |
+| Window | applied by you, before the split | applied by `one_frc` to both halves, after the split | 0.6 to 1% coarser at 10 to 200 counts per pixel, up to a factor 2 below 1 count per pixel |
+| Rings | `"floor"` | `"nearest"` | about 1% coarser |
+| Crossing | the mean frequency of a band of rings near the threshold | the first crossing, interpolated between two rings | 2 to 9% finer at 10 counts per pixel, with twice the spread between splits |
 
 We measured these effects in November 2026 on simulated images of 256 × 256 pixels: sparse points blurred by a Gaussian of 2 pixels, with Poisson noise. We compared each 1FRC with the 2FRC of two independent images with half the counts each. With the window applied after the split, the 1FRC matched the 2FRC at every count level.
 
-With `rings="floor"`, the frequencies in ring r lie on average half a ring above r, but the curve places the ring at r. The band of rings that `crossing="band"` averages often reaches past the first crossing, where a noisy curve rises above the threshold again.
+With `rings="floor"`, the frequencies in ring r lie on average half a ring above r, but the curve places the ring at r. The band of rings that earlier versions averaged often reaches past the first crossing, where a noisy curve rises above the threshold again.
 
-When `one_frc` splits an image whose values are not whole numbers, such as an image that was already windowed, it warns with a `frc.NotCountsWarning`.
+When the legacy `one_frc` splits an image whose values are not whole numbers, such as an image that was already windowed, it warns with a `frc.NotCountsWarning`. `FrcPlan.one_frc` refuses such an image.
 
 ## Packages
 
@@ -77,11 +76,11 @@ This repository holds three packages, which are released together under one vers
 
 | Package | Where | What it is |
 |---|---|---|
-| [`frc`](python/frc) | [PyPI](https://pypi.org/project/frc/) | The Python library: `one_frc`, `two_frc`, thresholds and the resolution, on NumPy arrays. |
+| [`frc`](python/frc) | [PyPI](https://pypi.org/project/frc/) | The Python library: `FrcPlan` on NumPy arrays, and the legacy functions of earlier versions. |
 | [`frc-core`](python/frc-core) | [PyPI](https://pypi.org/project/frc-core/) | The compiled core of frc, without dependencies. It takes any array that supports the buffer protocol and returns `memoryview`s. It replaces rustfrc. |
 | [`frc`](crates/frc) | [crates.io](https://crates.io/crates/frc) | The Rust library that both Python packages are built from. |
 
-`one_frc` of a 4096 × 4096 image takes about 15 to 25 ms from Python, on 8 threads of an AMD EPYC 9V45 (measured in November 2026). Earlier versions of frc took about a second.
+The 1FRC of a 4096 × 4096 image takes about 15 ms from Python with a plan, and about 25 ms with a new plan for each image, on 8 threads of an AMD EPYC 9V45 (measured in November 2026). Earlier versions of frc took about a second.
 
 ## References
 

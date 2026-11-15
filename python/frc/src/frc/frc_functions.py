@@ -1,4 +1,5 @@
-"""Fourier ring correlation curves of images, and the resolution they give."""
+"""The legacy API of frc: FRC curves and resolutions with the defaults of
+earlier versions. For new code, use FrcPlan."""
 
 # Copyright (C) 2021                Department of Imaging Physics
 # All rights reserved               Faculty of Applied Sciences
@@ -22,6 +23,9 @@ def two_frc(img1: Img, img2: Img, rings: str = "floor") -> np.ndarray:
     """
     Computes the FRC curve of two images of one scene whose noise is
     independent.
+
+    This function belongs to the legacy API, which keeps the defaults of
+    earlier versions of frc. For new code, use FrcPlan.
 
     The images must be square and of one size. Window them first, for
     example with apply_tukey, so that their edges leave no artifacts in the
@@ -60,6 +64,9 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
             rings: str = "floor") -> np.ndarray:
     """
     Computes the FRC curve of one image of counts.
+
+    This function belongs to the legacy API, which keeps the defaults of
+    earlier versions of frc. For new code, use FrcPlan.
 
     Pass a square 2D image of the counts as they were measured, and a
     tukey_alpha, such as 0.125. one_frc splits the counts in two images,
@@ -110,11 +117,7 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
         raise ValueError(f"img has shape {img.shape}, but must be a square 2D image. Trim or pad it first.")
     if method not in (1, 2):
         raise ValueError(f"method is {method!r}, but must be 1 or 2.")
-    if np.issubdtype(img.dtype, np.integer):
-        counts, holds_counts = img, True
-    else:
-        counts = img.astype(np.int32)
-        holds_counts = np.array_equal(counts, img)
+    counts, holds_counts = _util.counts_of(img)
 
     if tukey_alpha is None and not holds_counts:
         warnings.warn(
@@ -196,6 +199,9 @@ def frc_res(xs: np.ndarray, frc_curve: np.ndarray, img_size: int,
     """
     Computes the resolution from an FRC curve: one over the frequency at
     which the curve crosses its threshold.
+
+    This function belongs to the legacy API, which keeps the defaults of
+    earlier versions of frc. For new code, use FrcPlan.
 
     With crossing="first", frc_res finds the first ring i whose FRC is
     below its threshold. It then interpolates linearly between rings i - 1
