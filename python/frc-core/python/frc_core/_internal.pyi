@@ -1,35 +1,64 @@
 from collections.abc import Buffer
 
 def binom_split(a: Buffer, seed: int | None = None) -> memoryview:
-    """Splits every count n of an array of non-negative integers: returns, in an int32 array of
-    the same shape, a sample k of binomial(n, 0.5) for each.
+    """Splits every count of an array of non-negative integers in two.
+
+    Returns a memoryview of int32 values with the shape of the array. It holds, for each
+    count c, a sample k of binomial(c, 0.5): the number of ones among c random bits. If c is
+    Poisson-distributed with mean m, then k and c - k are independent and Poisson-distributed
+    with mean m / 2.
 
     The same counts and seed give the same samples on every CPU. Without a seed, every call
-    draws a fresh one from the operating system.
+    draws a new seed from the operating system.
     """
 
 def one_frc(img: Buffer, seed: int | None = None) -> memoryview:
-    """The Fourier ring correlation curve of a square image of counts, from one image split by
-    binom_split: a float64 array of length n // 2."""
+    """Computes the Fourier ring correlation curve of one square image of counts.
+
+    Splits every count c of the image into a sample k of binomial(c, 0.5) and c - k, and
+    correlates the two images that result, as two_frc does. Returns a memoryview of float64
+    values, one for each ring r < n / 2 of the n x n image.
+
+    The same image and seed give the same curve. Without a seed, every call draws a new seed
+    from the operating system.
+
+    Each call makes an FrcPlan, which takes time and memory. For several images of one size,
+    make one FrcPlan and call its one_frc.
+    """
 
 def two_frc(img1: Buffer, img2: Buffer) -> memoryview:
-    """The Fourier ring correlation curve of two square images of one size: a float64 array of
-    length n // 2. The images are read as float32."""
+    """Computes the Fourier ring correlation curve of two square images of one size.
+
+    Returns a memoryview of float64 values, one for each ring r < n / 2 of the n x n images.
+    The value of ring r is Re(sum F1 conj F2) / sqrt(sum |F1|^2 sum |F2|^2) over the
+    frequencies f with r <= |f| < r + 1, where F1 and F2 are the Fourier transforms of the
+    images. The images are read as float32.
+
+    Each call makes an FrcPlan, which takes time and memory. For several pairs of images of
+    one size, make one FrcPlan and call its two_frc.
+    """
 
 def ring_counts(n: int) -> memoryview:
-    """The number of frequencies in each ring r < n / 2 of an n x n spectrum: a uint64 array of
-    length n // 2."""
+    """Counts the frequencies in each ring of an n x n spectrum.
+
+    Returns a memoryview of uint64 values, one for each ring r < n / 2: the number of
+    frequencies f with r <= |f| < r + 1.
+    """
 
 class FrcPlan:
-    """FFT plans and an n x n spectrum, made once and reused for every image of that size."""
+    """The FFT plan and the working memory for FRC curves of n x n images.
+
+    Make one plan for a size and use it for every image of that size. A plan computes one
+    curve at a time: threads that share a plan take turns.
+    """
 
     def __init__(self, n: int) -> None: ...
     @property
     def size(self) -> int:
         """The side n of the images."""
     def ring_counts(self) -> memoryview:
-        """ring_counts(n)."""
+        """Counts the frequencies in each ring r < n / 2, as ring_counts(n) does."""
     def one_frc(self, img: Buffer, seed: int | None = None) -> memoryview:
-        """one_frc of an n x n image of counts."""
+        """Computes the FRC curve of an n x n image of counts, as the function one_frc does."""
     def two_frc(self, img1: Buffer, img2: Buffer) -> memoryview:
-        """two_frc of two n x n images."""
+        """Computes the FRC curve of two n x n images, as the function two_frc does."""

@@ -242,6 +242,7 @@ version = "0.2.0"
 dependencies = [
  "bytemuck",
  "frc",
+ "libc",
  "pyo3",
  "rand",
  "rayon",

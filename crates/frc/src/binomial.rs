@@ -14,6 +14,8 @@ use rand::SeedableRng;
 use rand_xoshiro::SplitMix64;
 use rayon::prelude::*;
 
+use crate::cpu::{CpuFeatures, InstructionSet};
+
 /// Number of counts that one generator samples, and so the unit of parallel work.
 pub const CHUNK_LEN: usize = 1 << 14;
 
@@ -35,51 +37,6 @@ impl std::error::Error for NegativeCount {}
 
 fn chunk_seed(seed: u64, chunk_index: usize) -> u64 {
     seed ^ (chunk_index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-}
-
-/// Which instructions the sampler may use beyond the x86-64 baseline that wheels are built for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CpuFeatures {
-    /// Only the baseline (SSE2), whatever the CPU has.
-    Baseline,
-    /// What the CPU reports at run time, up to AVX2 and `popcnt`: never AVX-512.
-    UpToAvx2,
-    /// Everything the CPU reports at run time that the sampler has a path for.
-    Detected,
-}
-
-/// The code that the sampler runs, as `CpuFeatures` and the CPU decide it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LanesPath {
-    Portable,
-    /// `avx2::sample_chunk`: rotates as two shifts and an or, popcount as a table lookup.
-    Avx2,
-    /// Native rotate (`vprolq`) and popcount (`vpopcntq`).
-    Avx512,
-}
-
-impl CpuFeatures {
-    /// The path the sampler takes on this CPU.
-    pub(crate) fn lanes_path(self) -> LanesPath {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let avx2 = self != Self::Baseline
-                && is_x86_feature_detected!("popcnt")
-                && is_x86_feature_detected!("avx2");
-            let avx512 = self == Self::Detected
-                && avx2
-                && is_x86_feature_detected!("avx512f")
-                && is_x86_feature_detected!("avx512vl")
-                && is_x86_feature_detected!("avx512vpopcntdq");
-            if avx512 {
-                return LanesPath::Avx512;
-            }
-            if avx2 {
-                return LanesPath::Avx2;
-            }
-        }
-        LanesPath::Portable
-    }
 }
 
 /// `L` xoshiro256++ generators stored lane by lane, so that one step of all of them compiles to
@@ -119,82 +76,74 @@ impl<const L: usize> XoshiroLanes<L> {
     }
 }
 
-/// Exact binomial (n, 0.5) for `L` counts at once, one per lane: lane i takes the bits of count
-/// i from generator lane i, 64 at a time, until the largest count of the group is covered. Every
-/// step is the same for all lanes, so it compiles to vector code: the mask is a variable shift
-/// (`vpsllvq`) and the popcount a table lookup on AVX2, which has no 64-bit popcount.
+/// Replaces the counts of each group, which must not be negative, with samples of binomial
+/// (n, 0.5): lane i takes the bits of count i from generator lane i, 64 at a time, until the
+/// largest count of the group is covered. Every step is the same for all lanes, so it compiles to
+/// vector code.
+///
+/// It is inlined into a function of its own for each set of CPU features. A closure between the
+/// two would be compiled for the baseline alone.
 #[inline(always)]
-fn binomial_lanes<const L: usize>(rng: &mut XoshiroLanes<L>, n: &[u32; L]) -> [u32; L] {
-    let max = n.iter().copied().max().unwrap_or(0);
-    let mut k = [0u64; L];
-    let mut words = [0u64; L];
-    let mut covered = 0u32;
-    while covered < max {
-        rng.next_block(&mut words);
-        for i in 0..L {
-            let left = n[i].saturating_sub(covered);
-            let mask = if left >= 64 {
-                u64::MAX
-            } else {
-                (1u64 << left) - 1
-            };
-            k[i] += (words[i] & mask).count_ones() as u64;
+fn sample_groups_portable(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+    for group in groups {
+        let largest = group.iter().copied().max().unwrap_or(0) as u32;
+        let mut ones = [0u64; LANES];
+        let mut words = [0u64; LANES];
+        let mut covered = 0u32;
+        while covered < largest {
+            rng.next_block(&mut words);
+            for i in 0..LANES {
+                let left = (group[i] as u32).saturating_sub(covered);
+                let mask = if left >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << left) - 1
+                };
+                ones[i] += (words[i] & mask).count_ones() as u64;
+            }
+            covered += 64;
         }
-        covered += 64;
-    }
-    k.map(|k| k as u32)
-}
-
-/// Replaces every count of `chunk`, which must not be negative, with the sample that `group`
-/// draws for it, `LANES` counts at a time; the last group is padded with zeros.
-#[inline(always)]
-fn sample_groups(chunk: &mut [i32], mut group: impl FnMut(&[u32; LANES]) -> [u32; LANES]) {
-    let (groups, tail) = chunk.as_chunks_mut::<LANES>();
-    for g in groups {
-        *g = group(&g.map(|x| x as u32)).map(|k| k as i32);
-    }
-    if !tail.is_empty() {
-        let mut n = [0; LANES];
-        for (n, x) in n.iter_mut().zip(tail.iter()) {
-            *n = *x as u32;
-        }
-        let k = group(&n);
-        for (x, k) in tail.iter_mut().zip(k) {
-            *x = k as i32;
-        }
+        *group = ones.map(|k| k as i32);
     }
 }
 
-#[inline(always)]
-fn sample_chunk_portable(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-    sample_groups(chunk, |n| binomial_lanes(rng, n))
-}
-
-/// `sample_chunk_portable` compiled for AVX-512, where `rotate_left` becomes `vprolq` and
+/// `sample_groups_portable` compiled for AVX-512, where `rotate_left` becomes `vprolq` and
 /// `count_ones` becomes `vpopcntq` (AVX512_VPOPCNTDQ: Ice Lake and later, Zen 4 and later).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512vpopcntdq,avx2,popcnt")]
-fn sample_chunk_avx512(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-    sample_chunk_portable(rng, chunk)
+fn sample_groups_avx512(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+    sample_groups_portable(rng, groups)
 }
 
-/// Samples `chunk` with the code of `path`. Calling code compiled for CPU features that the
-/// caller does not have is unsafe, and this is the only unsafe code outside `platform`.
+/// Replaces the counts of each group with samples, with the code for `set`. Calling code compiled
+/// for CPU features that the caller does not have is unsafe, and this is the only unsafe code
+/// outside `platform`.
 #[allow(unsafe_code)]
-fn sample_chunk(path: LanesPath, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-    match path {
-        LanesPath::Portable => sample_chunk_portable(rng, chunk),
-        // SAFETY: `CpuFeatures::lanes_path` gives a path only if the CPU has its features.
+fn sample_groups(set: InstructionSet, rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+    match set {
+        InstructionSet::Baseline => sample_groups_portable(rng, groups),
+        // SAFETY: `CpuFeatures::instruction_set` gives a set only if the CPU has it.
         #[cfg(target_arch = "x86_64")]
-        LanesPath::Avx2 => unsafe { avx2::sample_chunk(rng, chunk) },
+        InstructionSet::Avx2 => unsafe { avx2::sample_groups(rng, groups) },
         #[cfg(target_arch = "x86_64")]
-        LanesPath::Avx512 => unsafe { sample_chunk_avx512(rng, chunk) },
-        #[cfg(not(target_arch = "x86_64"))]
-        _ => unreachable!("only x86-64 has vector paths"),
+        InstructionSet::Avx512 => unsafe { sample_groups_avx512(rng, groups) },
     }
 }
 
-/// `sample_chunk_portable` by hand for AVX2, which LLVM compiles poorly from the portable code:
+/// Replaces every count of `chunk`, which must not be negative, with a sample of binomial
+/// (n, 0.5), `LANES` counts at a time. The last group is padded with zeros.
+fn sample_chunk(set: InstructionSet, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
+    let (groups, tail) = chunk.as_chunks_mut::<LANES>();
+    sample_groups(set, rng, groups);
+    if !tail.is_empty() {
+        let mut group = [0; LANES];
+        group[..tail.len()].copy_from_slice(tail);
+        sample_groups(set, rng, std::slice::from_mut(&mut group));
+        tail.copy_from_slice(&group[..tail.len()]);
+    }
+}
+
+/// `sample_groups_portable` by hand for AVX2, which LLVM compiles poorly from the portable code:
 /// the state of 16 lanes fills all 16 vector registers, so it spills on every step, and each
 /// word's popcount ends in its own `vpsadbw` and repacking. Here half the lanes at a time go
 /// through a block of groups with their state in registers. On a Ryzen 5 3400G (Zen+), which
@@ -217,31 +166,19 @@ mod avx2 {
     /// Popcounts of words (at most 8 per byte each) that a byte can add up before `vpsadbw`.
     const BYTE_SUM_WORDS: u32 = 31;
 
+    /// Replaces the counts of each group with samples, as `super::sample_groups_portable` does:
+    /// lane i of a group takes words from generator lane i until the group's largest count is
+    /// covered.
     #[target_feature(enable = "avx2")]
-    pub(super) fn sample_chunk(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-        let (groups, tail) = chunk.as_chunks_mut::<LANES>();
+    pub(super) fn sample_groups(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
         for block in groups.chunks_mut(BLOCK_GROUPS) {
-            sample_groups(rng, block);
-        }
-        if !tail.is_empty() {
-            let mut group = [0; LANES];
-            group[..tail.len()].copy_from_slice(tail);
-            sample_groups(rng, std::slice::from_mut(&mut group));
-            tail.copy_from_slice(&group[..tail.len()]);
-        }
-    }
-
-    /// Replaces the counts of up to `BLOCK_GROUPS` groups with samples, as `super::binomial_lanes`
-    /// does: lane i of a group takes words from generator lane i until the group's largest count
-    /// is covered.
-    #[target_feature(enable = "avx2")]
-    fn sample_groups(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
-        let mut words = [0; BLOCK_GROUPS];
-        for (words, group) in words.iter_mut().zip(groups.iter()) {
-            *words = (group.iter().copied().max().unwrap_or(0) as u32).div_ceil(64);
-        }
-        for first in (0..LANES).step_by(HALF) {
-            sample_half(rng, groups, &words, first);
+            let mut words = [0; BLOCK_GROUPS];
+            for (words, group) in words.iter_mut().zip(block.iter()) {
+                *words = (group.iter().copied().max().unwrap_or(0) as u32).div_ceil(64);
+            }
+            for first in (0..LANES).step_by(HALF) {
+                sample_half(rng, block, &words, first);
+            }
         }
     }
 
@@ -361,7 +298,7 @@ fn chunk_generator(seed: u64, index: usize) -> XoshiroLanes {
 /// path that `cpu` and the CPU allow. Fails, and leaves the chunks with a negative count as they
 /// are, if a count is negative.
 pub fn binom_split(counts: &mut [i32], seed: u64, cpu: CpuFeatures) -> Result<(), NegativeCount> {
-    let path = cpu.lanes_path();
+    let set = cpu.instruction_set();
     let negative = AtomicBool::new(false);
     counts
         .par_chunks_mut(CHUNK_LEN)
@@ -371,7 +308,7 @@ pub fn binom_split(counts: &mut [i32], seed: u64, cpu: CpuFeatures) -> Result<()
                 negative.store(true, Ordering::Relaxed);
                 return;
             }
-            sample_chunk(path, &mut chunk_generator(seed, i), chunk);
+            sample_chunk(set, &mut chunk_generator(seed, i), chunk);
         });
     if negative.into_inner() {
         Err(NegativeCount)
@@ -389,14 +326,14 @@ const SPLIT_BLOCK: usize = 4096;
 /// both give the same samples.
 pub struct Splitter {
     seed: u64,
-    path: LanesPath,
+    set: InstructionSet,
 }
 
 impl Splitter {
     pub fn new(seed: u64, cpu: CpuFeatures) -> Self {
         Self {
             seed,
-            path: cpu.lanes_path(),
+            set: cpu.instruction_set(),
         }
     }
 
@@ -418,7 +355,7 @@ impl Splitter {
         for (c, o) in counts.chunks(SPLIT_BLOCK).zip(out.chunks_mut(SPLIT_BLOCK)) {
             let k = &mut k[..c.len()];
             k.copy_from_slice(c);
-            sample_chunk(self.path, &mut rng, k);
+            sample_chunk(self.set, &mut rng, k);
             for ((o, &n), &k) in o.iter_mut().zip(c).zip(k.iter()) {
                 *o = f(n, k);
             }

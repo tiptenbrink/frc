@@ -76,7 +76,11 @@ def test_binom_split_keeps_the_shape_and_halves_the_mean():
     assert np.all((k >= 0) & (k <= 1000))
     assert abs(k.mean() - 500) < 1.5
     assert frc_core.binom_split(a, seed=1) == frc_core.binom_split(a, seed=1)
-    assert np.asarray(frc_core.binom_split(np.zeros((0, 4), dtype=np.int32))).size == 0
+    # The result is the caller's own array, to change in place.
+    assert k.flags.writeable and k.flags.c_contiguous
+    assert np.asarray(frc_core.binom_split(np.zeros((0, 4), dtype=np.int32))).shape == (0, 4)
+    odd = np.asarray(frc_core.binom_split(np.full(7, 9, dtype=np.uint8), seed=1))
+    assert odd.shape == (7,) and odd.dtype == np.int32 and np.all(odd <= 9)
 
 
 def test_ring_counts_cover_the_disk():

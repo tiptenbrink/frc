@@ -6,11 +6,11 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use frc::{CpuFeatures, FrcPlan, binom_split};
 use rand::SeedableRng;
 use rand_distr::{Distribution, Poisson};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use rayon::prelude::*;
-use frc::{CpuFeatures, FrcPlan, binom_split};
 
 const SEED: u64 = 0x5EED;
 

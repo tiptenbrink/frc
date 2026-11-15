@@ -40,8 +40,10 @@
 #![deny(unsafe_code)]
 
 mod binomial;
+mod cpu;
 mod frc;
 mod platform;
 
-pub use binomial::{CpuFeatures, NegativeCount, binom_split};
+pub use binomial::{NegativeCount, binom_split};
+pub use cpu::CpuFeatures;
 pub use frc::{FrcPlan, RingSums, ring_counts};
