@@ -38,7 +38,7 @@ To find the resolution from a curve without a plan, make `frc.Rings(n, binning="
 
 ## Legacy API
 
-The functions `one_frc`, `two_frc` and `frc_res` are the API of earlier versions of frc. They keep its defaults, so that earlier results can be reproduced. Each default shifts the resolution by one to a few percent:
+The functions `one_frc`, `two_frc`, `half_bit_threshold` and `frc_res` are the API of earlier versions of frc. They are defined in `frc.legacy`, and `frc` imports them, so `frc.one_frc` still works. They keep its defaults, so that earlier results can be reproduced. Each default shifts the resolution by one to a few percent:
 
 - `one_frc(img, method=1, seed=None, tukey_alpha=None, binning="floor")` applies no window unless you pass `tukey_alpha`. In earlier versions, you windowed the image yourself before the split, which makes the resolution slightly coarser. With `tukey_alpha`, `one_frc` windows both halves after the split, as `FrcPlan` does. Method 2 splits the image twice, independently.
 - `binning` is `"floor"`, which places ring r about half a ring too low. Pass `binning="nearest"` for rings centred on r. `two_frc(img1, img2, binning="floor")` takes the same argument.

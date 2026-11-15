@@ -14,7 +14,7 @@ def test_simple_no_err():
 
 
 def test_half_bit_threshold():
-    from frc.frc_functions import half_bit_threshold
+    from frc.legacy import half_bit_threshold
 
     threshold = half_bit_threshold(80)
     values = threshold(np.array([0.1, 0.2]))
@@ -137,7 +137,7 @@ def test_the_binning_is_floor_unless_asked_for_nearest():
 
 
 def test_the_half_bit_threshold_follows_the_binning():
-    from frc.frc_functions import half_bit_threshold
+    from frc.legacy import half_bit_threshold
 
     xs = np.arange(32) / 64
     floor, nearest = half_bit_threshold(64)(xs), half_bit_threshold(64, "nearest")(xs)
@@ -175,7 +175,7 @@ def test_two_frc_of_an_image_with_itself_is_one():
 
 
 def test_half_bit_threshold_counts_the_rings_of_twice_the_size():
-    from frc.frc_functions import half_bit_threshold
+    from frc.legacy import half_bit_threshold
 
     # The threshold at ring 0 has one frequency: (s + f + 1) / (s + 1 + f), with s = sqrt(2)/2 - 1/2.
     assert half_bit_threshold(16)(0.0) == pytest.approx(1.0)
