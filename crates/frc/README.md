@@ -1,6 +1,6 @@
 # frc
 
-Computes the Fourier ring correlation (FRC) of images, which microscopy uses to measure resolution: of two images of one scene, or of one image of photon counts that it splits in two.
+Computes the Fourier ring correlation (FRC) of images, which microscopy uses to measure resolution. It takes two images of one scene, or one image of photon counts that it splits in two.
 
 To compute an FRC curve:
 
@@ -33,7 +33,7 @@ The FRC of a ring is Re(Σ F1 conj F2) / sqrt(Σ |F1|² Σ |F2|²), where F1 and
 
 ## One image of counts
 
-`one_frc` splits every count c of the image into a sample k of binomial(c, 1/2) and c - k. A Poisson count with mean λ becomes two independent Poisson counts with mean λ / 2, so one image becomes two independent images of the same scene (Rieger, Droste, Gerritsma, ten Brink and Stallinga, [Optics Express 32(12), 2024](https://doi.org/10.1364/OE.524683)). The split is exact: k is the number of ones among c random bits.
+`one_frc` splits every count c of the image into a sample k of binomial(c, 1/2) and c - k. A Poisson count with mean λ becomes two independent Poisson counts with mean λ / 2. One image thus becomes two independent images of the same scene (Rieger, Droste, Gerritsma, ten Brink and Stallinga, [Optics Express 32(12), 2024](https://doi.org/10.1364/OE.524683)). The split is exact: k is the number of ones among c random bits.
 
 [`binom_split`] does the same split on its own. It replaces every count of an image with its sample k. With the same seed it draws the samples that `one_frc` draws, so `one_frc` of an image is `two_frc` of the two halves that `binom_split` makes of it.
 

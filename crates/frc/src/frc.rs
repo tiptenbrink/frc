@@ -159,10 +159,12 @@ fn spectrum_panels(n: usize) -> Vec<Panel> {
 }
 
 /// Returns `len` zeros for the spectrum, with every page touched once, in parallel: each thread
-/// faults in its own share of the pages, in order. When the row pass touched them first, whose
-/// tasks write their rows into every panel, the first FRC of a plan took 60 ms longer than later
-/// ones on a Ryzen 5 3400G in a VM. Touching a page costs much less than writing its zeros, which
-/// `par_extend` would do: 18 against 24 ms for a plan at 4096 x 4096 on three of its threads.
+/// faults in its own share of the pages, in order.
+///
+/// When the row pass touched the pages first, the first FRC of a plan took 60 ms longer than
+/// later ones on a Ryzen 5 3400G in a VM: every task of the row pass writes rows into every
+/// panel. Touching a page costs much less than writing its zeros, which `par_extend` would do.
+/// A plan at 4096 x 4096 took 18 against 24 ms on three threads of that CPU.
 fn zeroed_spectrum(len: usize) -> Vec<Complex32> {
     let mut spectrum = platform::zeroed_complex_vec(len);
     let page = 4096 / size_of::<Complex32>();
@@ -196,9 +198,9 @@ pub fn ring_counts(n: usize) -> Vec<u64> {
     counts
 }
 
-/// The ring sums of a task of the column pass, over the half plane fy > 0, or fy = 0 and
-/// fx > 0: the three sums of ring r in element r, for r < n / 2, and the terms of the origin
-/// in element n / 2.
+/// The ring sums of a task of the column pass over the half plane: the frequencies with fy > 0,
+/// and those with fy = 0 and fx > 0. Element r holds the three sums of ring r, for r < n / 2.
+/// Element n / 2 holds the terms of the origin.
 type HalfPlaneSums = Vec<[f64; 3]>;
 
 fn add_terms(sum: &mut [f64; 3], terms: [f32; 3]) {
@@ -340,10 +342,11 @@ fn add_panel_ring_sums(
 
 /// Copies a panel of `width` columns into `columns`, the column at slot s from index
 /// `s * stride` on. It loads `PANEL_COPY_ROWS` rows and then stores them to each column at once.
+///
 /// Storing each value right after loading it took 18 ms per 4096 x 4096 spectrum in some
-/// processes and 47 ms in others on a Ryzen 5 3400G, with the same instructions and cache
-/// misses, as if the CPU had learned to make the loads wait for the stores. In blocks it takes
-/// 11 ms in every process.
+/// processes and 47 ms in others on a Ryzen 5 3400G. Both ran the same instructions and missed
+/// the cache as often, so the CPU probably made the loads wait for the stores in the slow ones.
+/// In blocks the copy takes 11 ms in every process.
 fn panel_into_columns(data: &[Complex32], width: usize, columns: &mut [Complex32], stride: usize) {
     let rows = data.len() / width;
     let block_rows = rows / PANEL_COPY_ROWS * PANEL_COPY_ROWS;

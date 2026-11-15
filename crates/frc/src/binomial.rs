@@ -99,7 +99,7 @@ impl<const L: usize> XoshiroLanes<L> {
 }
 
 /// Replaces the counts of each group, which must not be negative, with samples of binomial
-/// (n, 0.5): lane i takes the bits of count i from generator lane i, 64 at a time, until the
+/// (n, 0.5). Lane i takes the bits of count i from generator lane i, 64 at a time, until the
 /// largest count of the group is covered. Every step is the same for all lanes, so it compiles to
 /// vector code.
 ///
@@ -165,7 +165,7 @@ fn sample_chunk(set: InstructionSet, rng: &mut XoshiroLanes, chunk: &mut [i32]) 
     }
 }
 
-/// `sample_groups_portable` by hand for AVX2, which LLVM compiles poorly from the portable code:
+/// `sample_groups_portable` by hand for AVX2. LLVM compiles the portable code poorly for AVX2:
 /// the state of 16 lanes fills all 16 vector registers, so it spills on every step, and each
 /// word's popcount ends in its own `vpsadbw` and repacking. Here half the lanes at a time go
 /// through a block of groups, so that their state takes 8 of the registers.

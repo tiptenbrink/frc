@@ -12,7 +12,7 @@ Most users want the first: `pip install frc`, and see [its README](python/frc/RE
 
 ## Layout
 
-- `crates/frc`: the Rust library. `binomial.rs` holds the split, `frc.rs` the FRC, and `platform.rs` the crate's unsafe code.
+- `crates/frc`: the Rust library. `binomial.rs` holds the split, `frc.rs` the FRC, `cpu.rs` the choice of CPU instructions, and `platform.rs` the crate's unsafe code.
 - `crates/frc-python`: the PyO3 bindings, built into the module `frc_core._internal`, and never published to crates.io. `buffers.rs` reads arrays through the buffer protocol and makes the `memoryview`s, and `buffer_memory.rs` holds its only unsafe code.
 - `python/frc-core`: the Python package frc-core, built with maturin from `crates/frc-python`. `frc_core/_internal.pyi` holds the module's types.
 - `python/frc`: the Python package frc, pure Python, built with uv.
@@ -24,6 +24,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a Rust
 - `uv sync --all-packages` creates `.venv` with both Python packages and their development dependencies, and builds the extension. Run it again after changing the Rust code. Pass `-p 3.11` to develop against the oldest supported Python.
 - `uv run pytest` runs the tests of both Python packages.
 - `cargo test --workspace` runs the Rust tests, and `cargo bench -p frc` times the split and the FRC at several sizes.
+- CI also runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS` set to `-D warnings`.
 
 ## Releasing
 

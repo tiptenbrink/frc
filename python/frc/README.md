@@ -1,42 +1,18 @@
 # frc
 
-`frc` is a Python library for calculating Fourier Ring Correlation (FRC) curves and their associated resolution.
+`frc` computes Fourier ring correlation (FRC) curves of images and the resolution that follows from them. Microscopy uses it to determine the resolution of images, in particular of images taken with super-resolution techniques. It works from two images of one scene, or from one image of photon counts (1FRC).
 
-This is particularly useful for determining the resolution of images taken with super-resolution microscopy techniques.
-
-Its most computationally intensive functions are implemented in Rust, in [frc-core](https://pypi.org/project/frc-core/), which is released with frc from the same repository: the binomial split and the FRC itself, with its Fourier transforms and ring sums. `one_frc` on a 4096x4096 image takes about 30 ms on 8 threads of an AMD EPYC 9V45, instead of about 1 s in frc 0.2. The same code is also a Rust crate, [`frc`](https://crates.io/crates/frc).
-
-### Fourier Ring Correlation
-
-Introduced in 1982, Fourier Ring Correlation compares two 2D images, which are assumed to be noise-independent. In Fourier space, mage structure dominates the lower spatial frequencies (in the Fourier domain), while noise dominates at the higher frequencies.
-
-In Fourier space, there are rings of constant spatial frequency around the origin. By calculating the correlation between the rings in the two images (varying the spatial frequency), you can compute an FRC curve (y-axis: correlation, x-axis: spatial frequency).
-
-At some spatial frequency, the signal cannot be separated from the noise. What spatial frequency exactly depends on what threshold function is used. The standard 0.143 and 1/2-bit thresholds are both available, as well as an algorithm to compute the intersection and resulting resolution.
-
-For additional information about Fourier Ring Correlation, see [R.P.J. Nieuwenhuizen et al. (2013)](https://doi.org/10.1038/nmeth.2448).
-
-#### 1FRC
-
-FRC requires two noise-independent images to work. However, modern cameras are often shot noise-limited (Poisson noise). This library includes a new method due to Bernd Rieger and Sjoerd Stallinga (Department of Imaging Physics, TU Delft), called 1FRC, which uses a technique called binomial splitting to derive two images from a single one, where the pixel counts of the derived images are independently Poisson noise distributed.
-
-This library was produced for my bachelor thesis in 2022 (which focused on 1FRC) and was supervised by Bernd Rieger. [The bachelor thesis can be found here](http://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a). Bernd Rieger and Sjoerd Stallinga continued research, leading to a peer reviewed paper published in 2024 in Optics Express, [which can be found here](https://doi.org/10.1364/OE.524683). Their paper includes many details on the limitations of 1FRC and when exactly it is appropriate. I repeat the abstract below:
-
-> We address resolution assessment for (light super-resolution) microscopy imaging. In modalities where imaging is not diffraction limited, correlation between two noise independent images is the standard way to infer the resolution. Here we take away the need for two noise independent images by computationally splitting one image acquisition into two noise independent realizations. This procedure generates two Poisson noise distributed images if the input is Poissonian distributed. As most modern cameras are shot-noise limited this procedure is directly applicable. However, also in the presence of readout noise we can compute the resolution faithfully via a correction factor. We evaluate our method on simulations and experimental data of widefield microscopy, STED microscopy, rescan confocal microscopy, image scanning microscopy, conventional confocal microscopy, and transmission electron microscopy. In all situations we find that using one image instead of two results in the same computed image resolution.
-
-### Installation
-
-You can download this library from PyPI:
+## Installation
 
 ```shell
 pip install frc
 ```
 
-frc depends on [NumPy](https://numpy.org/) and [frc-core](https://pypi.org/project/frc-core/), its Rust extension, of the same version. frc-core has no dependencies, and one wheel per platform covers every CPython from 3.11 on, so frc runs on every Python that NumPy supports.
+frc depends on [NumPy](https://numpy.org/) and on [frc-core](https://pypi.org/project/frc-core/), its compiled core, of the same version. frc-core has no dependencies, and one wheel per platform covers every CPython from 3.11 on.
 
-### Usage
+## Usage
 
-The code snippet below (which for illustration purposes assumes you have a NumPy array representing your input, its associated scale and also matplotlib to plot the result) will calculate the FRC curve and the associated resolution using the standard 1/7 threshold.
+The example below computes the FRC curve of one image and its resolution at the 1/7 threshold. It assumes that `img` holds the photon counts of your image and that `scale` is the number of pixels per unit of length, and it plots the result with matplotlib.
 
 ```python
 import frc
@@ -61,9 +37,11 @@ plt.plot(xs_nm_freq, frc_curve)
 plt.show()
 ```
 
-#### Troubleshooting
+For two images of one scene, call `frc.two_frc(img1, img2)` in place of `frc.one_frc(img)`.
 
-If you cannot find an intersection (`NoIntersectionException`), be sure to plot the curve without using the `frc_res` method and see if there even is an intersection. For example:
+### Troubleshooting
+
+`frc_res` raises `NoIntersectionException` if the curve does not cross the threshold. Plot the curve without `frc_res` to see whether it does:
 
 ```python
 import frc
@@ -82,8 +60,30 @@ plt.plot(xs_nm_freq, frc_curve)
 plt.show()
 ```
 
-For images with a significant amount of non-Poisson noise, the 1FRC method has been shown to fail (adjustments are possible).
+1FRC fails for images with much noise that is not Poisson noise. The paper below describes a correction.
 
-### Development
+## Fourier ring correlation
+
+Fourier ring correlation, introduced in 1982, compares two images of one scene whose noise is independent. In the Fourier transforms of the images, the structure of the scene dominates the low spatial frequencies, and noise dominates the high ones.
+
+The frequencies at one distance from the origin form a ring. The correlation between the two transforms over a ring, as a function of the ring's frequency, is the FRC curve.
+
+Above some frequency, the signal cannot be told from the noise. That frequency depends on the threshold that the curve is compared with. frc has the 1/7 (0.143) threshold and the 1/2-bit threshold, and it finds where a curve crosses its threshold, which gives the resolution.
+
+For more about Fourier ring correlation, see [R.P.J. Nieuwenhuizen et al. (2013)](https://doi.org/10.1038/nmeth.2448).
+
+### 1FRC
+
+FRC needs two images with independent noise. Modern cameras are often limited by shot noise, which is Poisson noise. 1FRC, a method by Bernd Rieger and Sjoerd Stallinga (Department of Imaging Physics, TU Delft), splits each pixel's count of one such image binomially. The two images that result have independent Poisson noise.
+
+I wrote this library for my bachelor thesis in 2022, on 1FRC, with Bernd Rieger as supervisor. [The thesis is here](http://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a). Bernd Rieger and Sjoerd Stallinga continued the research, and published a peer-reviewed paper in Optics Express in 2024, [which is here](https://doi.org/10.1364/OE.524683). The paper describes the limitations of 1FRC and when it applies. Its abstract:
+
+> We address resolution assessment for (light super-resolution) microscopy imaging. In modalities where imaging is not diffraction limited, correlation between two noise independent images is the standard way to infer the resolution. Here we take away the need for two noise independent images by computationally splitting one image acquisition into two noise independent realizations. This procedure generates two Poisson noise distributed images if the input is Poissonian distributed. As most modern cameras are shot-noise limited this procedure is directly applicable. However, also in the presence of readout noise we can compute the resolution faithfully via a correction factor. We evaluate our method on simulations and experimental data of widefield microscopy, STED microscopy, rescan confocal microscopy, image scanning microscopy, conventional confocal microscopy, and transmission electron microscopy. In all situations we find that using one image instead of two results in the same computed image resolution.
+
+## Performance
+
+The binomial split and the FRC itself, with its Fourier transforms and ring sums, run in Rust, in [frc-core](https://pypi.org/project/frc-core/). `one_frc` of a 4096 x 4096 image of int32 counts takes about 26 ms on 8 threads of an AMD EPYC 9V45 (measured on 2026-11-14), where frc 0.2 took about a second. frc-core's README has more measurements. The same code is also a Rust crate, [`frc`](https://crates.io/crates/frc).
+
+## Development
 
 frc, frc-core and the crate frc live in one [repository](https://github.com/tiptenbrink/frc), whose README describes how to build and test them.

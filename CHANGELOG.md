@@ -14,7 +14,7 @@ frc now computes the FRC in Rust, and this repository releases three packages at
 
 ### Changed
 
-- `one_frc` and `two_frc` run in Rust: the split, the Fourier transforms and the ring sums, in two passes over memory. `one_frc` on a 4096 x 4096 image takes about 30 ms instead of about 1 s, on 8 threads of an AMD EPYC 9V45. Rings hold the same frequencies as DIPlib's `RadialSum`, which frc used before.
+- `one_frc` and `two_frc` run in Rust: the split, the Fourier transforms and the ring sums, in two passes over memory. `one_frc` of a 4096 x 4096 image takes about 26 ms instead of about 1 s, on 8 threads of an AMD EPYC 9V45. Rings hold the same frequencies as DIPlib's `RadialSum`, which frc used before.
 - The binomial split samples binomial(n, 0.5) exactly, by counting the ones among n random bits from 16 xoshiro256++ generators at once, with AVX-512 or AVX2 when the CPU has them, chosen at run time.
 - `one_frc` truncates float images to int32 counts before the split, for both halves; earlier versions kept the fractional part in the second half.
 - `gaussf` filters with NumPy. For sigmas of 0.8 and more it gives what DIPlib gave, to within 1e-14; for smaller sigmas, DIPlib used a Fourier method instead.
