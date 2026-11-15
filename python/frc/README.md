@@ -23,7 +23,7 @@ xs = np.arange(len(curve)) / n  # the frequency of each ring, in cycles per pixe
 resolution, _, _ = frc.frc_res(xs, curve, n, rings="nearest", crossing="first")  # in pixels
 ```
 
-- `one_frc(img, method=1, seed=None, tukey_alpha=None, rings="floor")` splits every count of `img` binomially in two, multiplies both halves by a Tukey window with alpha `tukey_alpha`, and returns their FRC curve. Method 2 splits the image twice, independently. The same image and `seed` give the same curve.
+- `one_frc(img, method=1, seed=None, tukey_alpha=None, rings="floor")` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) with alpha `tukey_alpha`, and returns their FRC curve. Method 2 splits the image twice, independently. The same image and `seed` give the same curve.
 - `two_frc(img1, img2, rings="floor")` returns the FRC curve of two images. Multiply both by `frc.util.tukey_square(n)` first.
 - `frc_res(xs, frc_curve, img_size, threshold=None, rings="floor", crossing="band")` returns the resolution, the value of the threshold where the curve crosses it, and the threshold as a function. `xs` holds the frequency of each ring in any unit, and the resolution comes out in the reciprocal unit. `threshold` is `"1/7"`, the default, `"half_bit"`, or a function of the frequency. Pass the rings that the curve was computed with. `crossing="first"` interpolates the first point at which the curve drops below the threshold.
 - `frc.util` holds `apply_tukey`, `tukey_square`, `tukey_window`, `square_image`, `gaussf` and `intersection`.

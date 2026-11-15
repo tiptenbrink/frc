@@ -40,7 +40,7 @@ assert_eq!(plan.two_frc(&first, &second), curve);
 
 ## The curve and its parts
 
-The FRC of a ring is Re(Σ F1 conj F2) / sqrt(Σ |F1|² Σ |F2|²), where F1 and F2 are the Fourier transforms of the two images and the sums run over the frequencies of the ring. [`FrcPlan::one_frc_ring_sums`] and [`FrcPlan::two_frc_ring_sums`] return the three sums and the number of frequencies of each ring as [`RingSums`], and [`ring_counts`] returns only those numbers. [`Rings::Floor`] gives the rings of earlier versions of frc, the bins of DIPlib's `RadialSum`.
+The FRC of a ring is Re(Σ F1 conj F2) / sqrt(Σ |F1|² Σ |F2|²), where F1 and F2 are the Fourier transforms of the two images and the sums run over the frequencies of the ring. [`FrcPlan::one_frc_ring_sums`] and [`FrcPlan::two_frc_ring_sums`] return the three sums and the number of frequencies of each ring as [`RingSums`], and [`ring_counts`] returns only those numbers. [`Rings::Floor`] gives the rings of earlier versions of frc, the bins of [DIPlib](https://diplib.org)'s `RadialSum`.
 
 `one_frc` splits every count c into a sample k of binomial(c, 1/2) and c - k. It draws k as the number of ones among c random bits. It multiplies both halves by the window after the split, because a count multiplied by a window is no longer a Poisson count. [`binom_split`] does the same split on its own. With the same seed it draws the samples that `one_frc` draws, so `one_frc` of an image is `two_frc` of the two halves that `binom_split` makes of it, each multiplied by the window.
 

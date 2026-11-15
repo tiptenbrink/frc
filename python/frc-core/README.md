@@ -22,7 +22,7 @@ img = np.random.default_rng(0).poisson(100, (1024, 1024))
 curve = np.asarray(frc_core.one_frc(img, seed=1))
 ```
 
-- `one_frc(img, seed=None, tukey_alpha=0.125, rings="nearest")` splits every count of `img` binomially in two, multiplies both halves by a Tukey window with alpha `tukey_alpha`, and returns their FRC curve: a float64 value for each ring r < n // 2 of the n x n image. `tukey_alpha=0` applies no window.
+- `one_frc(img, seed=None, tukey_alpha=0.125, rings="nearest")` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) with alpha `tukey_alpha`, and returns their FRC curve: a float64 value for each ring r < n // 2 of the n x n image. `tukey_alpha=0` applies no window.
 - `two_frc(img1, img2, rings="nearest")` returns the FRC curve of two square images of one size. It applies no window: multiply both images by one first.
 - `binom_split(a, seed=None)` returns an int32 array of the shape of `a` with a sample k of binomial(c, 0.5) for each count c. If c is Poisson-distributed with mean λ, then k and c - k are independent and Poisson-distributed with mean λ / 2.
 - `resolution(curve, n, threshold="1/7", rings="nearest")` returns the resolution of an n x n image in pixels, and the threshold at the crossing, or `None` if the curve does not drop below the threshold. It finds the first ring whose FRC is below the threshold and interpolates between that ring and the one before it. `threshold` is `"1/7"`, `"half_bit"` or a float.
@@ -43,4 +43,4 @@ Without a seed, every call draws a new seed from the operating system. With a se
 
 `FrcPlan.one_frc` of a 4096 x 4096 int32 image takes about 15 ms, and `one_frc`, which also makes the plan, about 25 ms. This was measured on 2026-11-14 through Python, on 8 threads of an AMD EPYC 9V45. Counts that are not int32, and images for `two_frc` that are not float32, are converted first. For a 4096 x 4096 int64 image that adds about 11 ms.
 
-frc-core replaces rustfrc, whose last release is 1.2.0.
+frc-core replaces [rustfrc](https://pypi.org/project/rustfrc/), whose last release is 1.2.0.

@@ -1,8 +1,8 @@
 # frc
 
-frc measures the resolution of microscopy images with Fourier ring correlation (FRC). Super-resolution microscopy goes beyond the diffraction limit, so its resolution no longer follows from the optics. FRC determines the resolution from the images themselves, by comparing two images of the same object with independent noise [2]. This is also called 2FRC, and in three dimensions Fourier shell correlation (FSC).
+frc measures the resolution of microscopy images with Fourier ring correlation (FRC). Super-resolution microscopy goes beyond the diffraction limit, so its resolution no longer follows from the optics. FRC determines the resolution from the images themselves, by comparing two images of the same object with independent noise [[2]][ref2]. This is also called 2FRC, and in three dimensions Fourier shell correlation (FSC).
 
-frc can also compute the FRC of a single image of photon counts, by splitting it binomially into two images [1]. This is called 1FRC, or single image FRC. frc was originally written for a bachelor thesis on 1FRC at Delft University of Technology [6].
+frc can also compute the FRC of a single image of photon counts, by splitting it binomially into two images [[1]][ref1]. This is called 1FRC, or single image FRC. frc was originally written for a bachelor thesis on 1FRC at Delft University of Technology [[6]][ref6].
 
 ## Measuring the resolution of an image
 
@@ -27,33 +27,33 @@ resolution, _, _ = frc.frc_res(xs, curve, n, rings="nearest", crossing="first")
 print(f"resolution: {resolution:.2f} pixels")
 ```
 
-`one_frc` splits the counts and applies a Tukey window with parameter α = `tukey_alpha` to both halves. `frc_res` finds where the curve first drops below the threshold and returns one over that spatial frequency. To get the resolution in nanometres, give `xs` in 1/nm, or multiply the result by the pixel size.
+`one_frc` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) with parameter α = `tukey_alpha` to both halves. `frc_res` finds where the curve first drops below the threshold and returns one over that spatial frequency. To get the resolution in nanometres, give `xs` in 1/nm, or multiply the result by the pixel size.
 
-The default threshold is the fixed value 1/7 [3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [4], or a function of the spatial frequency for any other threshold. If the curve never drops below the threshold, `frc_res` raises `frc.NoIntersectionException`. Plotting `curve` against `xs` usually shows why.
+The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a function of the spatial frequency for any other threshold. If the curve never drops below the threshold, `frc_res` raises `frc.NoIntersectionException`. Plotting `curve` against `xs` usually shows why.
 
 If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `frc.two_frc(img1, img2, rings="nearest")` instead of `one_frc`.
 
 ## The FRC curve
 
-For two images with Fourier transforms F₁ and F₂, the FRC at spatial frequency q is [2, 5]
+For two images with Fourier transforms F₁ and F₂, the FRC at spatial frequency q is [[2]][ref2], [[5]][ref5]
 
 ```math
 \mathrm{FRC}(q) = \frac{\mathrm{Re} \sum_{\mathbf{q} \in \text{ring}} F_1(\mathbf{q})\, F_2(\mathbf{q})^*}{\sqrt{\sum_{\mathbf{q} \in \text{ring}} |F_1(\mathbf{q})|^2 \, \sum_{\mathbf{q} \in \text{ring}} |F_2(\mathbf{q})|^2}},
 ```
 
-where the sums run over the ring of frequencies **q** at distance q from the origin. At low frequencies the object dominates both images, and the FRC is close to 1. At high frequencies the independent noise dominates, and the FRC drops to around 0. The resolution is one over the spatial frequency at which the curve crosses a threshold [1, 3].
+where the sums run over the ring of frequencies **q** at distance q from the origin. At low frequencies the object dominates both images, and the FRC is close to 1. At high frequencies the independent noise dominates, and the FRC drops to around 0. The resolution is one over the spatial frequency at which the curve crosses a threshold [[1]][ref1], [[3]][ref3].
 
-For an image of n × n pixels, frc computes the FRC of the rings r = 0, 1, …, n/2 − 1, and ring r has spatial frequency r/n. With `rings="nearest"`, ring r holds the frequencies whose distance to the origin rounds to r. With `rings="floor"`, it holds the frequencies at a distance d with r ≤ d < r + 1, as in DIPlib's `RadialSum`.
+For an image of n × n pixels, frc computes the FRC of the rings r = 0, 1, …, n/2 − 1, and ring r has spatial frequency r/n. With `rings="nearest"`, ring r holds the frequencies whose distance to the origin rounds to r. With `rings="floor"`, it holds the frequencies at a distance d with r ≤ d < r + 1, as in [DIPlib](https://diplib.org)'s `RadialSum`.
 
 ## When 1FRC works
 
-Suppose a pixel value N is Poisson distributed with mean λ. The binomial split samples a value X from a binomial distribution with N trials and probability 1/2, and puts N − X in the second image. X and N − X are then independent and both Poisson distributed with mean λ/2 [1]. The two new images are therefore equivalent to two independent measurements with half the exposure, and their FRC is the 1FRC of the original image.
+Suppose a pixel value N is Poisson distributed with mean λ. The binomial split samples a value X from a binomial distribution with N trials and probability 1/2, and puts N − X in the second image. X and N − X are then independent and both Poisson distributed with mean λ/2 [[1]][ref1]. The two new images are therefore equivalent to two independent measurements with half the exposure, and their FRC is the 1FRC of the original image.
 
 This only holds if the pixel values are Poisson-distributed photon counts. Cameras limited by shot noise, such as sCMOS and EMCCD cameras, give such counts after offset and gain correction. If the pixel values deviate from this, the 1FRC curve no longer drops to 0 at high frequencies, but levels off at a plateau above or below 0:
 
-- Readout noise, or an error in the offset or the gain, causes such a plateau. Rieger et al. derive its height [1, eqs. 28–32]. A gain that is a few percent off can already change the resolution. The thesis [6] found that the plateau lies at 1 − μ/σ², where μ is the mean and σ² the variance of a pixel after the split.
-- Any processing before the split, such as filtering, deconvolution or reconstruction, mixes the noise of neighbouring pixels. The two halves of the split are then no longer independent. Rieger et al. write: "It is imperative to split the image data in the processing pipeline when Poisson statistics applies. This is at the raw data level, after gain and offset correction." [1]
-- A window multiplies each count by a weight w between 0 and 1, which acts like a gain of w. By equation 31 of [1], the plateau is then (w − 1)/(w + 1), which is below 0. This is why `one_frc` applies its window after the split.
+- Readout noise, or an error in the offset or the gain, causes such a plateau. Rieger et al. derive its height in equations 28 to 32 of [[1]][ref1]. A gain that is a few percent off can already change the resolution. The thesis [[6]][ref6] found that the plateau lies at 1 − μ/σ², where μ is the mean and σ² the variance of a pixel after the split.
+- Any processing before the split, such as filtering, deconvolution or reconstruction, mixes the noise of neighbouring pixels. The two halves of the split are then no longer independent. Rieger et al. write: "It is imperative to split the image data in the processing pipeline when Poisson statistics applies. This is at the raw data level, after gain and offset correction." [[1]][ref1]
+- A window multiplies each count by a weight w between 0 and 1, which acts like a gain of w. By equation 31 of [[1]][ref1], the plateau is then (w − 1)/(w + 1), which is below 0. This is why `one_frc` applies its window after the split.
 
 ## Differences from earlier versions
 
@@ -90,13 +90,13 @@ This repository holds three packages, which are released together under one vers
 3. P. B. Rosenthal and R. Henderson, "Optimal determination of particle orientation, absolute hand, and contrast loss in single-particle electron cryomicroscopy," Journal of Molecular Biology 333(4), 721-745 (2003). [doi:10.1016/j.jmb.2003.07.013](https://doi.org/10.1016/j.jmb.2003.07.013)
 4. M. van Heel and M. Schatz, "Fourier shell correlation threshold criteria," Journal of Structural Biology 151(3), 250-262 (2005). [doi:10.1016/j.jsb.2005.05.009](https://doi.org/10.1016/j.jsb.2005.05.009)
 5. M. van Heel, "Similarity measures between images," Ultramicroscopy 21(1), 95-100 (1987). [doi:10.1016/0304-3991(87)90010-6](https://doi.org/10.1016/0304-3991(87)90010-6)
-6. T. ten Brink, "Fourier Ring Correlation with a single image," bachelor thesis, Delft University of Technology (2022). [resolver.tudelft.nl](http://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a)
+6. T. ten Brink, "Fourier Ring Correlation with a single image," bachelor thesis, Delft University of Technology (2022). [resolver.tudelft.nl](https://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a)
 
-To cite frc itself, use the metadata in [`CITATION.cff`](CITATION.cff). To cite the 1FRC method, cite [1].
+To cite frc itself, use the metadata in [`CITATION.cff`](CITATION.cff). To cite the 1FRC method, cite [[1]][ref1].
 
 ## History
 
-frc started in September 2021 as part of a bachelor thesis on 1FRC at Delft University of Technology [6]. The thesis used three packages written for it: frc for the FRC itself, rustfrc, an extension module in Rust for the binomial split, and AnalyzeFRC for the analysis of the curves. frc 0.1.0 was released in April 2022 so that the thesis could cite it, and the thesis was completed in May 2022. In 2024, Rieger et al. published the 1FRC method [1].
+frc started in September 2021 as part of a bachelor thesis on 1FRC at Delft University of Technology [[6]][ref6]. The thesis used three packages written for it: frc for the FRC itself, [rustfrc](https://pypi.org/project/rustfrc/), an extension module in Rust for the binomial split, and [AnalyzeFRC](https://doi.org/10.5281/zenodo.6457673) for the analysis of the curves. [frc 0.1.0](https://doi.org/10.5281/zenodo.6461444) was released in April 2022 so that the thesis could cite it, and the thesis was completed in May 2022. In 2024, Rieger et al. published the 1FRC method [[1]][ref1].
 
 frc 0.1.1 added Python 3.12 in 2024. In late 2026, frc 0.1.2 to 0.2.0 brought it up to date with current versions of Python, NumPy and DIPlib. After that, the FRC computation was moved to Rust, and rustfrc was replaced by frc-core and the Rust crate frc. These now live in this repository together with frc, including the history of rustfrc. frc no longer depends on DIPlib or SciPy.
 
@@ -107,3 +107,10 @@ frc 0.1.1 added Python 3.12 in 2024. In late 2026, frc 0.1.2 to 0.2.0 brought it
 ## License
 
 All three packages are licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+[ref1]: https://doi.org/10.1364/OE.524683
+[ref2]: https://doi.org/10.1038/nmeth.2448
+[ref3]: https://doi.org/10.1016/j.jmb.2003.07.013
+[ref4]: https://doi.org/10.1016/j.jsb.2005.05.009
+[ref5]: https://doi.org/10.1016/0304-3991(87)90010-6
+[ref6]: https://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a
