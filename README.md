@@ -1,12 +1,8 @@
 # frc
 
-frc measures the resolution of microscopy images with Fourier ring correlation (FRC).
+frc measures the resolution of microscopy images with Fourier ring correlation (FRC). Super-resolution microscopy goes beyond the diffraction limit, so its resolution no longer follows from the optics. FRC determines the resolution from the images themselves, by comparing two images of the same object with independent noise [2]. This is also called 2FRC, and in three dimensions Fourier shell correlation (FSC).
 
-For a diffraction-limited microscope, the resolution follows from the optics: by Abbe's formula, it is the wavelength divided by twice the numerical aperture. Super-resolution methods, such as STED and localization microscopy, go beyond this limit, and their resolution also depends on other parameters, such as the intensity of the STED beam. FRC instead determines the resolution from the images themselves, without detailed knowledge of the optical setup [2]. It compares two images of the same object with independent noise, and finds the spatial frequency up to which the two images still agree.
-
-It is not always possible to measure two such images, and many images were made without this in mind. frc can therefore also compute the FRC of a single image of photon counts. It splits every pixel value binomially into two new images with independent Poisson noise [1]. We call FRC from two separately measured images 2FRC, and FRC from one image 1FRC, or single image FRC. In three dimensions, FRC is known as Fourier shell correlation (FSC), the name under which it is mostly used in cryo-EM. frc computes only the two-dimensional FRC.
-
-frc was originally written for a bachelor thesis on 1FRC at Delft University of Technology [6]. The 1FRC method itself is due to B. Rieger and S. Stallinga, and is described in [1].
+frc can also compute the FRC of a single image of photon counts, by splitting it binomially into two images [1]. This is called 1FRC, or single image FRC. frc was originally written for a bachelor thesis on 1FRC at Delft University of Technology [6].
 
 ## Measuring the resolution of an image
 
