@@ -1,6 +1,6 @@
-//! Times `binom_split`, `FrcPlan::one_frc` and `FrcPlan::two_frc` at several image sizes, and
-//! the steps of `one_frc` at 4096 x 4096. Rayon uses every core unless `RAYON_NUM_THREADS` says
-//! otherwise.
+//! Times `binom_split`, `FrcPlan::one_image` and `FrcPlan::two_images` at several image
+//! sizes, and the steps of `FrcPlan::one_image` at 4096 x 4096. Rayon uses every core unless
+//! `RAYON_NUM_THREADS` says otherwise.
 
 use std::hint::black_box;
 use std::time::Duration;
@@ -52,14 +52,14 @@ fn frc(c: &mut Criterion) {
         let floats: Vec<f32> = image.iter().map(|&v| v as f32).collect();
         let mut plan = FrcPlan::new(n, Rings::default());
         group.throughput(Throughput::Elements((n * n) as u64));
-        group.bench_function(BenchmarkId::new("one_frc", n), |b| {
+        group.bench_function(BenchmarkId::new("one_image", n), |b| {
             b.iter(|| {
-                plan.one_frc(black_box(&image), Window::default(), SEED)
+                plan.one_image(black_box(&image), Window::default(), SEED)
                     .unwrap()
             })
         });
-        group.bench_function(BenchmarkId::new("two_frc", n), |b| {
-            b.iter(|| plan.two_frc(black_box(&floats), black_box(&floats)))
+        group.bench_function(BenchmarkId::new("two_images", n), |b| {
+            b.iter(|| plan.two_images(black_box(&floats), black_box(&floats)))
         });
     }
     group.finish();
@@ -69,8 +69,8 @@ fn steps(c: &mut Criterion) {
     let n = 4096;
     let image = image(n);
     let mut plan = FrcPlan::new(n, Rings::default());
-    plan.one_frc(&image, Window::default(), SEED).unwrap();
-    let mut group = c.benchmark_group("one_frc_steps_4096");
+    plan.one_image(&image, Window::default(), SEED).unwrap();
+    let mut group = c.benchmark_group("one_image_steps_4096");
     group.bench_function("split_fft_rows", |b| {
         b.iter(|| {
             plan.split_fft_rows(black_box(&image), Window::default(), SEED)

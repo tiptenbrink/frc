@@ -10,21 +10,21 @@ frc needs Python 3.11 or later. It depends on NumPy and on [frc-core](https://py
 
 ## Usage
 
-Make an `FrcPlan` for the size of your images, and use it for every image of that size. Pass its `one_frc` a square image of photon counts, after offset and gain correction and before any other processing:
+Make an `FrcPlan` for the size of your images, and use it for every image of that size. Pass its `one_image` a square image of photon counts, after offset and gain correction and before any other processing:
 
 ```python
 import frc
 
 counts = frc.util.square_image(counts, add_padding=False)
 plan = frc.FrcPlan(counts.shape[0])
-curve = plan.one_frc(counts)
+curve = plan.one_image(counts)
 resolution = plan.resolution(curve)  # in pixels
 ```
 
 `FrcPlan(n, rings="nearest")` holds the Fourier transform plan and the working memory for images of n × n pixels. Its methods:
 
-- `one_frc(img, seed=None, tukey_alpha=0.125)` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window), and returns their FRC curve. The same image and `seed` give the same curve.
-- `two_frc(img1, img2)` returns the FRC curve of two images of the same object with independent noise. Multiply both by `frc.util.tukey_square(n)` first.
+- `one_image(img, seed=None, tukey_alpha=0.125)` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window), and returns their FRC curve. The same image and `seed` give the same curve.
+- `two_images(img1, img2)` returns the FRC curve of two images of the same object with independent noise. Multiply both by `frc.util.tukey_square(n)` first.
 - `resolution(curve, threshold="1/7")` returns the resolution in pixels. It interpolates where the curve first drops below the threshold, which is `"1/7"`, `"half_bit"` or a number. It raises `frc.NoIntersectionException` if the curve does not drop below the threshold.
 - `frequencies()` returns the spatial frequency of each ring in 1/pixel. Plot the curve against it to see where it crosses the threshold.
 

@@ -1,8 +1,9 @@
 //! Fourier ring correlation of two images, or of one image of counts split in two.
 //!
 //! Both images go through one complex FFT, of z = a + i b. For one image of counts n, a is the
-//! binomial sample k and b is n - k, both multiplied by the window. With Z the spectrum of z, the spectra of the two images are
-//! F1(f) = (Z(f) + conj Z(-f)) / 2 and F2(f) = (Z(f) - conj Z(-f)) / 2i. The FRC at ring r is
+//! binomial sample k and b is n - k, both multiplied by the window. With Z the spectrum of z,
+//! the spectra of the two images are F1(f) = (Z(f) + conj Z(-f)) / 2 and
+//! F2(f) = (Z(f) - conj Z(-f)) / 2i. The FRC at ring r is
 //! Re(sum F1 conj F2) / sqrt(sum |F1|^2 sum |F2|^2) over the frequencies f of ring r, for
 //! r < n / 2. [`Rings`] says which frequencies those are.
 //!
@@ -469,7 +470,7 @@ impl FrcPlan {
     /// Poisson counts, whose variance is their mean. A count that a window has scaled by w has
     /// w times the mean and w² times the variance, and the noise of its two halves correlates.
     ///
-    /// The same counts, window and seed give the same curve: that of [`FrcPlan::two_frc`] for
+    /// The same counts, window and seed give the same curve: that of [`FrcPlan::two_images`] for
     /// the samples k that [`binom_split`](crate::binom_split) draws with the same seed and the
     /// rest c - k, each multiplied by the window.
     ///
@@ -480,17 +481,17 @@ impl FrcPlan {
     /// # Panics
     ///
     /// Panics if `counts` does not hold n² counts, or if the alpha of a Tukey window is NaN.
-    pub fn one_frc(
+    pub fn one_image(
         &mut self,
         counts: &[i32],
         window: Window,
         seed: u64,
     ) -> Result<Vec<f64>, NegativeCount> {
-        let sums = self.one_frc_ring_sums(counts, window, seed)?;
+        let sums = self.one_image_ring_sums(counts, window, seed)?;
         Ok(sums.iter().map(RingSums::frc).collect())
     }
 
-    /// Computes the sums over each ring r < n / 2 that [`FrcPlan::one_frc`] takes its curve
+    /// Computes the sums over each ring r < n / 2 that [`FrcPlan::one_image`] takes its curve
     /// from.
     ///
     /// # Errors
@@ -500,7 +501,7 @@ impl FrcPlan {
     /// # Panics
     ///
     /// Panics if `counts` does not hold n² counts, or if the alpha of a Tukey window is NaN.
-    pub fn one_frc_ring_sums(
+    pub fn one_image_ring_sums(
         &mut self,
         counts: &[i32],
         window: Window,
@@ -518,18 +519,18 @@ impl FrcPlan {
     /// # Panics
     ///
     /// Panics if `a` or `b` does not hold n² values.
-    pub fn two_frc(&mut self, a: &[f32], b: &[f32]) -> Vec<f64> {
-        let sums = self.two_frc_ring_sums(a, b);
+    pub fn two_images(&mut self, a: &[f32], b: &[f32]) -> Vec<f64> {
+        let sums = self.two_images_ring_sums(a, b);
         sums.iter().map(RingSums::frc).collect()
     }
 
-    /// Computes the sums over each ring r < n / 2 that [`FrcPlan::two_frc`] takes its curve
+    /// Computes the sums over each ring r < n / 2 that [`FrcPlan::two_images`] takes its curve
     /// from.
     ///
     /// # Panics
     ///
     /// Panics if `a` or `b` does not hold n² values.
-    pub fn two_frc_ring_sums(&mut self, a: &[f32], b: &[f32]) -> Vec<RingSums> {
+    pub fn two_images_ring_sums(&mut self, a: &[f32], b: &[f32]) -> Vec<RingSums> {
         self.check_len("a", a.len());
         self.check_len("b", b.len());
         let Ok(()) = self.fft_rows_of(|_, values, z| {
@@ -546,7 +547,7 @@ impl FrcPlan {
         assert_eq!(len, n * n, "{name} holds {len} values, {n} x {n} required");
     }
 
-    /// The row pass of [`FrcPlan::one_frc`], for benchmarks: the split, the window and the row
+    /// The row pass of [`FrcPlan::one_image`], for benchmarks: the split, the window and the row
     /// FFTs.
     #[doc(hidden)]
     pub fn split_fft_rows(
@@ -804,13 +805,13 @@ mod tests {
     }
 
     #[test]
-    fn two_frc_matches_its_definition() {
+    fn two_images_matches_its_definition() {
         for (n, rings) in [2, 3, 4, 5, 16, 17, 21, 24, 30, 33]
             .into_iter()
             .flat_map(|n| BOTH_RINGS.map(|rings| (n, rings)))
         {
             let (a, b) = two_images(n);
-            let got = FrcPlan::new(n, rings).two_frc_ring_sums(&a, &b);
+            let got = FrcPlan::new(n, rings).two_images_ring_sums(&a, &b);
             let want = naive_ring_sums(&a, &b, n, rings);
             assert_eq!(got.len(), want.len());
             for (r, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -833,10 +834,10 @@ mod tests {
     /// Sizes above `TERM_ROWS` rows per column and above one task per pass, against a sum over
     /// the whole plane in f64 of the spectrum that rustfft computes.
     #[test]
-    fn two_frc_of_large_images_matches_a_sum_over_the_whole_plane() {
+    fn two_images_of_large_images_matches_a_sum_over_the_whole_plane() {
         for (n, rings) in [(600, Rings::Nearest), (1030, Rings::Floor)] {
             let (a, b) = two_images(n);
-            let got = FrcPlan::new(n, rings).two_frc_ring_sums(&a, &b);
+            let got = FrcPlan::new(n, rings).two_images_ring_sums(&a, &b);
             let fft = FftPlanner::<f32>::new().plan_fft_forward(n);
             let spectrum = |image: &[f32]| {
                 let mut z: Vec<Complex32> = image.iter().map(|&v| Complex32::new(v, 0.0)).collect();
@@ -897,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn one_frc_is_two_frc_of_its_windowed_halves() {
+    fn one_image_is_two_images_of_its_windowed_halves() {
         // 300 and 1030 take several chunks of the split, the last one shorter.
         for n in [2, 3, 17, 96, 300, 1030] {
             let counts = pattern_image(n, 60.0, 5);
@@ -914,8 +915,8 @@ mod tests {
                 let k = windowed(&|i| samples[i]);
                 let rest = windowed(&|i| counts[i] - samples[i]);
                 assert_eq!(
-                    plan.two_frc_ring_sums(&k, &rest),
-                    plan.one_frc_ring_sums(&counts, window, 13).unwrap(),
+                    plan.two_images_ring_sums(&k, &rest),
+                    plan.one_image_ring_sums(&counts, window, 13).unwrap(),
                     "n = {n}, {window:?}"
                 );
             }
@@ -927,9 +928,12 @@ mod tests {
         let n = 512;
         let mut plan = FrcPlan::new(n, Rings::default());
         let image = pattern_image(n, 100.0, 2);
-        let frc = plan.one_frc(&image, Window::None, 5).unwrap();
+        let frc = plan.one_image(&image, Window::None, 5).unwrap();
         assert_eq!(frc[0], 1.0);
-        assert_eq!(plan.one_frc(&image, Window::default(), 5).unwrap()[0], 1.0);
+        assert_eq!(
+            plan.one_image(&image, Window::default(), 5).unwrap()[0],
+            1.0
+        );
         // The weakest wave, at ring 120, stands about 90 times above its ring's noise at this
         // size, and its cross terms with the noise move the FRC by a few percent.
         for (u, w, _) in PATTERN_IMAGE_WAVES {
@@ -938,7 +942,7 @@ mod tests {
         }
         // With Floor rings, the wave at |f| = 5.83 lies in ring 5 instead of ring 6.
         let floor = FrcPlan::new(n, Rings::Floor)
-            .one_frc(&image, Window::None, 5)
+            .one_image(&image, Window::None, 5)
             .unwrap();
         assert!(
             floor[5] > 0.9 && frc[5] < 0.5,
@@ -966,7 +970,7 @@ mod tests {
                 .unwrap();
             pool.install(|| {
                 FrcPlan::new(n, Rings::default())
-                    .one_frc(&counts, Window::default(), 3)
+                    .one_image(&counts, Window::default(), 3)
                     .unwrap()
             })
         };
@@ -983,16 +987,16 @@ mod tests {
         let mut plan = FrcPlan::new(n, Rings::default());
         let window = Window::default();
         assert_eq!(
-            plan.one_frc(&counts, window, 11).unwrap(),
-            plan.one_frc(&counts, window, 11).unwrap()
+            plan.one_image(&counts, window, 11).unwrap(),
+            plan.one_image(&counts, window, 11).unwrap()
         );
         assert_ne!(
-            plan.one_frc(&counts, window, 11).unwrap(),
-            plan.one_frc(&counts, window, 12).unwrap()
+            plan.one_image(&counts, window, 11).unwrap(),
+            plan.one_image(&counts, window, 12).unwrap()
         );
         assert_ne!(
-            plan.one_frc(&counts, window, 11).unwrap(),
-            plan.one_frc(&counts, Window::None, 11).unwrap()
+            plan.one_image(&counts, window, 11).unwrap(),
+            plan.one_image(&counts, Window::None, 11).unwrap()
         );
     }
 
@@ -1002,7 +1006,7 @@ mod tests {
         let mut counts = pattern_image(n, 10.0, 4);
         counts[500] = -1;
         assert_eq!(
-            FrcPlan::new(n, Rings::default()).one_frc(&counts, Window::default(), 1),
+            FrcPlan::new(n, Rings::default()).one_image(&counts, Window::default(), 1),
             Err(NegativeCount)
         );
     }

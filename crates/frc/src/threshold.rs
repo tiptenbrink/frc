@@ -50,7 +50,7 @@ impl Crossing {
 
 /// Returns the point at which `curve` first drops below `threshold`, or `None` if it does not.
 ///
-/// `curve` holds the FRC of ring r at index r, as [`FrcPlan::one_frc`](crate::FrcPlan::one_frc)
+/// `curve` holds the FRC of ring r at index r, as [`FrcPlan::one_image`](crate::FrcPlan::one_image)
 /// returns it, and `ring_counts` the number of frequencies in each ring, as
 /// [`FrcPlan::ring_counts`](crate::FrcPlan::ring_counts) returns them. This function finds the
 /// first ring i >= 1 whose FRC is below its threshold. It draws a straight line through the

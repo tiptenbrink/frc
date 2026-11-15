@@ -27,10 +27,10 @@ def test_same_seed_same_curve():
     img = pattern_image(64, 30.0, 2)
     plan = frc_core.FrcPlan(64)
     assert plan.size == 64
-    assert plan.one_frc(img, seed=5) == plan.one_frc(img, seed=5)
-    assert plan.one_frc(img, seed=5) != plan.one_frc(img, seed=6)
+    assert plan.one_image(img, seed=5) == plan.one_image(img, seed=5)
+    assert plan.one_image(img, seed=5) != plan.one_image(img, seed=6)
     # Without a seed, every call splits anew.
-    assert plan.one_frc(img) != plan.one_frc(img)
+    assert plan.one_image(img) != plan.one_image(img)
 
 
 @pytest.mark.parametrize("dtype", [np.uint8, np.int16, np.uint16, np.int64, np.uint64])
@@ -94,7 +94,7 @@ def test_one_frc_windows_both_halves_after_the_split(n, alpha):
     want = np.asarray(frc_core.two_frc(window * half, window * (img - half)))
     # one_frc multiplies in float32.
     assert np.allclose(frc_core.one_frc(img, seed=12, tukey_alpha=alpha), want, atol=1e-5)
-    assert np.allclose(frc_core.FrcPlan(n).one_frc(img, seed=12, tukey_alpha=alpha), want, atol=1e-5)
+    assert np.allclose(frc_core.FrcPlan(n).one_image(img, seed=12, tukey_alpha=alpha), want, atol=1e-5)
     assert not np.allclose(frc_core.one_frc(img, seed=12, tukey_alpha=0), want, atol=1e-5)
 
 
@@ -149,9 +149,9 @@ def test_the_default_rings_are_nearest():
     assert frc_core.ring_counts(16) == frc_core.ring_counts(16, "nearest") != frc_core.ring_counts(16, "floor")
     img = pattern_image(64, 50.0, 10)
     assert frc_core.one_frc(img, seed=1) == frc_core.one_frc(img, seed=1, rings="nearest")
-    assert frc_core.one_frc(img, seed=1, rings="floor") == frc_core.FrcPlan(64, "floor").one_frc(img, seed=1)
+    assert frc_core.one_frc(img, seed=1, rings="floor") == frc_core.FrcPlan(64, "floor").one_image(img, seed=1)
     floats = img.astype(np.float32)
-    assert frc_core.two_frc(floats, floats[::-1], rings="floor") == frc_core.FrcPlan(64, "floor").two_frc(floats, floats[::-1])
+    assert frc_core.two_frc(floats, floats[::-1], rings="floor") == frc_core.FrcPlan(64, "floor").two_images(floats, floats[::-1])
 
 
 def test_resolution_interpolates_the_first_crossing():
@@ -168,7 +168,7 @@ def test_resolution_of_a_plan_uses_its_rings():
     img = pattern_image(128, 40.0, 11)
     for rings in ("nearest", "floor"):
         plan = frc_core.FrcPlan(128, rings)
-        curve = plan.one_frc(img, seed=2)
+        curve = plan.one_image(img, seed=2)
         for threshold in ("1/7", "half_bit", 0.5):
             assert plan.resolution(curve, threshold) == frc_core.resolution(curve, 128, threshold, rings)
     # The 1/2-bit threshold depends on the number of frequencies in each ring.
@@ -206,14 +206,14 @@ def test_non_square_images_are_refused(shape):
 def test_bad_counts_are_refused():
     plan = frc_core.FrcPlan(16)
     with pytest.raises(ValueError, match="plan is for"):
-        plan.one_frc(np.ones((8, 8), dtype=np.int32))
+        plan.one_image(np.ones((8, 8), dtype=np.int32))
     img = np.ones((16, 16), dtype=np.int32)
     img[3, 4] = -1
     with pytest.raises(ValueError, match="negative"):
-        plan.one_frc(img)
+        plan.one_image(img)
     with pytest.raises(ValueError, match="above"):
         frc_core.binom_split(np.array([2**31], dtype=np.int64))
     with pytest.raises(TypeError, match="integer counts"):
-        plan.one_frc(np.ones((16, 16)))
+        plan.one_image(np.ones((16, 16)))
     with pytest.raises(TypeError, match="buffer protocol"):
         frc_core.binom_split([1, 2, 3])

@@ -174,7 +174,7 @@ fn binom_split<'py>(
 /// a new seed from the operating system.
 ///
 /// Each call makes an FrcPlan, which takes time and memory. For several images of one size,
-/// make one FrcPlan and call its one_frc.
+/// make one FrcPlan and call its one_image.
 #[pyfunction]
 #[pyo3(signature = (img, seed=None, tukey_alpha=0.125, rings="nearest"))]
 fn one_frc<'py>(
@@ -185,7 +185,7 @@ fn one_frc<'py>(
     rings: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
     let n = InputBuffer::get(img, "img")?.square_size()?;
-    FrcPlanPy::new(n, rings)?.one_frc(py, img, seed, tukey_alpha)
+    FrcPlanPy::new(n, rings)?.one_image(py, img, seed, tukey_alpha)
 }
 
 /// Computes the Fourier ring correlation curve of two square images of one size.
@@ -197,7 +197,7 @@ fn one_frc<'py>(
 /// function applies no window: multiply both images by one first.
 ///
 /// Each call makes an FrcPlan, which takes time and memory. For several pairs of images of
-/// one size, make one FrcPlan and call its two_frc.
+/// one size, make one FrcPlan and call its two_images.
 #[pyfunction]
 #[pyo3(signature = (img1, img2, rings="nearest"))]
 fn two_frc<'py>(
@@ -207,7 +207,7 @@ fn two_frc<'py>(
     rings: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
     let n = InputBuffer::get(img1, "img1")?.square_size()?;
-    FrcPlanPy::new(n, rings)?.two_frc(py, img1, img2)
+    FrcPlanPy::new(n, rings)?.two_images(py, img1, img2)
 }
 
 /// Counts the frequencies in each ring of an n x n spectrum.
@@ -320,7 +320,7 @@ impl FrcPlanPy {
 
     /// Computes the FRC curve of an n x n image of counts, as the function one_frc does.
     #[pyo3(signature = (img, seed=None, tukey_alpha=0.125))]
-    fn one_frc<'py>(
+    fn one_image<'py>(
         &self,
         py: Python<'py>,
         img: &Bound<'py, PyAny>,
@@ -334,14 +334,14 @@ impl FrcPlanPy {
         let curve = py.detach(|| -> PyResult<Vec<f64>> {
             let counts = input.counts()?;
             let mut plan = self.locked_plan();
-            plan.one_frc(&counts, window, seed)
+            plan.one_image(&counts, window, seed)
                 .map_err(|_| input.invalid_count_error())
         })?;
         memoryview_of(py, &curve)
     }
 
     /// Computes the FRC curve of two n x n images, as the function two_frc does.
-    fn two_frc<'py>(
+    fn two_images<'py>(
         &self,
         py: Python<'py>,
         img1: &Bound<'py, PyAny>,
@@ -355,7 +355,7 @@ impl FrcPlanPy {
         self.check_image(&b)?;
         let curve = py.detach(|| {
             let (a, b) = (a.floats(), b.floats());
-            self.locked_plan().two_frc(&a, &b)
+            self.locked_plan().two_images(&a, &b)
         });
         memoryview_of(py, &curve)
     }

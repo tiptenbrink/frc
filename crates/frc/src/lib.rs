@@ -1,10 +1,10 @@
 // The README links its items to docs.rs. These definitions come first, so rustdoc links the same
 // names to the items themselves and warns when one of them no longer exists.
 //! [`FrcPlan`]: FrcPlan
-//! [`FrcPlan::one_frc`]: FrcPlan::one_frc
-//! [`FrcPlan::two_frc`]: FrcPlan::two_frc
-//! [`FrcPlan::one_frc_ring_sums`]: FrcPlan::one_frc_ring_sums
-//! [`FrcPlan::two_frc_ring_sums`]: FrcPlan::two_frc_ring_sums
+//! [`FrcPlan::one_image`]: FrcPlan::one_image
+//! [`FrcPlan::two_images`]: FrcPlan::two_images
+//! [`FrcPlan::one_image_ring_sums`]: FrcPlan::one_image_ring_sums
+//! [`FrcPlan::two_images_ring_sums`]: FrcPlan::two_images_ring_sums
 //! [`RingSums`]: RingSums
 //! [`Rings`]: Rings
 //! [`Rings::Nearest`]: Rings::Nearest

@@ -199,29 +199,29 @@ def test_a_plan_computes_frc_cores_curves_on_numpy_arrays():
     counts = pattern_image(64, 40.0, 9)
     plan = frc.FrcPlan(64)
     assert (plan.size, plan.rings) == (64, "nearest")
-    curve = plan.one_frc(counts, seed=3)
+    curve = plan.one_image(counts, seed=3)
     assert isinstance(curve, np.ndarray)
     assert np.array_equal(curve, np.asarray(frc_core.one_frc(counts, 3)))
     # Counts in floats are counts.
-    assert np.array_equal(plan.one_frc(counts.astype(np.float64), seed=3), curve)
-    assert np.array_equal(plan.one_frc(counts, seed=3, tukey_alpha=0), frc.one_frc(counts, seed=3, rings="nearest"))
+    assert np.array_equal(plan.one_image(counts.astype(np.float64), seed=3), curve)
+    assert np.array_equal(plan.one_image(counts, seed=3, tukey_alpha=0), frc.one_frc(counts, seed=3, rings="nearest"))
     floats = frc.util.apply_tukey(counts.astype(np.float64))
-    assert np.array_equal(plan.two_frc(floats, floats[::-1]), frc.two_frc(floats, floats[::-1], rings="nearest"))
+    assert np.array_equal(plan.two_images(floats, floats[::-1]), frc.two_frc(floats, floats[::-1], rings="nearest"))
     assert np.array_equal(plan.frequencies(), np.arange(32) / 64)
     assert np.array_equal(plan.ring_counts(), np.asarray(frc_core.ring_counts(64)))
-    assert np.array_equal(frc.FrcPlan(64, "floor").one_frc(counts, seed=3), np.asarray(frc_core.one_frc(counts, 3, rings="floor")))
+    assert np.array_equal(frc.FrcPlan(64, "floor").one_image(counts, seed=3), np.asarray(frc_core.one_frc(counts, 3, rings="floor")))
 
 
 def test_a_plan_refuses_values_that_are_not_counts():
     windowed = frc.util.apply_tukey(pattern_image(32, 40.0, 7))
     with pytest.raises(ValueError, match="not whole numbers"):
-        frc.FrcPlan(32).one_frc(windowed)
+        frc.FrcPlan(32).one_image(windowed)
 
 
 def test_a_plans_resolution_is_frc_res_with_the_first_crossing():
     counts = pattern_image(64, 40.0, 10)
     plan = frc.FrcPlan(64)
-    curve = plan.one_frc(counts, seed=1)
+    curve = plan.one_image(counts, seed=1)
     for threshold in ("1/7", "half_bit"):
         want, _, _ = frc.frc_res(plan.frequencies(), curve, 64, threshold, rings="nearest", crossing="first")
         assert plan.resolution(curve, threshold) == pytest.approx(want)

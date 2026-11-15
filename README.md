@@ -21,16 +21,16 @@ counts = np.clip(np.rint((raw - offset) / gain), 0, None).astype(np.int32)
 counts = frc.util.square_image(counts, add_padding=False)
 
 plan = frc.FrcPlan(counts.shape[0])
-curve = plan.one_frc(counts)
+curve = plan.one_image(counts)
 resolution = plan.resolution(curve)
 print(f"resolution: {resolution:.2f} pixels")
 ```
 
-`one_frc` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) to both halves. `resolution` finds where the curve first drops below the threshold and returns one over that spatial frequency, in pixels. Multiply it by the pixel size for a length.
+`one_image` splits the counts and applies a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) to both halves. `resolution` finds where the curve first drops below the threshold and returns one over that spatial frequency, in pixels. Multiply it by the pixel size for a length.
 
 The default threshold is the fixed value 1/7 [[3]][ref3]. Pass `threshold="half_bit"` for the 1/2-bit threshold [[4]][ref4], or a number. If the curve never drops below the threshold, `resolution` raises `frc.NoIntersectionException`. Plotting `curve` against `plan.frequencies()` usually shows why.
 
-If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `plan.two_frc(img1, img2)` instead of `one_frc`.
+If you have two independently measured images, multiply both by `frc.util.tukey_square(n)` and use `plan.two_images(img1, img2)` instead of `one_image`.
 
 ## The FRC curve
 
@@ -52,7 +52,7 @@ This only holds if the pixel values are Poisson-distributed photon counts. Camer
 
 - Readout noise, or an error in the offset or the gain, causes such a plateau. Rieger et al. derive its height in equations 28 to 32 of [[1]][ref1]. A gain that is a few percent off can already change the resolution. The thesis [[6]][ref6] found that the plateau lies at 1 − μ/σ², where μ is the mean and σ² the variance of a pixel after the split.
 - Any processing before the split, such as filtering, deconvolution or reconstruction, mixes the noise of neighbouring pixels. The two halves of the split are then no longer independent. Rieger et al. write: "It is imperative to split the image data in the processing pipeline when Poisson statistics applies. This is at the raw data level, after gain and offset correction." [[1]][ref1]
-- A window multiplies each count by a weight w between 0 and 1, which acts like a gain of w. By equation 31 of [[1]][ref1], the plateau is then (w − 1)/(w + 1), which is below 0. This is why `one_frc` applies its window after the split.
+- A window multiplies each count by a weight w between 0 and 1, which acts like a gain of w. By equation 31 of [[1]][ref1], the plateau is then (w − 1)/(w + 1), which is below 0. This is why `FrcPlan.one_image` applies its window after the split.
 
 ## Differences from earlier versions
 
@@ -60,7 +60,7 @@ Earlier versions of frc made three choices that shift the resolution by one to a
 
 | | Earlier versions | Now | Effect of the old choice on the resolution |
 |---|---|---|---|
-| Window | applied by you, before the split | applied by `one_frc` to both halves, after the split | 0.6 to 1% coarser at 10 to 200 counts per pixel, up to a factor 2 below 1 count per pixel |
+| Window | applied by you, before the split | applied by `one_image` to both halves, after the split | 0.6 to 1% coarser at 10 to 200 counts per pixel, up to a factor 2 below 1 count per pixel |
 | Rings | `"floor"` | `"nearest"` | about 1% coarser |
 | Crossing | the mean frequency of a band of rings near the threshold | the first crossing, interpolated between two rings | 2 to 9% finer at 10 counts per pixel, with twice the spread between splits |
 
@@ -68,7 +68,7 @@ We measured these effects in November 2026 on simulated images of 256 × 256 pix
 
 With `rings="floor"`, the frequencies in ring r lie on average half a ring above r, but the curve places the ring at r. The band of rings that earlier versions averaged often reaches past the first crossing, where a noisy curve rises above the threshold again.
 
-When the legacy `one_frc` splits an image whose values are not whole numbers, such as an image that was already windowed, it warns with a `frc.NotCountsWarning`. `FrcPlan.one_frc` refuses such an image.
+When the legacy `one_frc` splits an image whose values are not whole numbers, such as an image that was already windowed, it warns with a `frc.NotCountsWarning`. `FrcPlan.one_image` refuses such an image.
 
 ## Packages
 

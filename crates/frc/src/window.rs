@@ -2,7 +2,7 @@
 
 use std::f64::consts::PI;
 
-/// The window that [`FrcPlan::one_frc`](crate::FrcPlan::one_frc) multiplies both halves of an
+/// The window that [`FrcPlan::one_image`](crate::FrcPlan::one_image) multiplies both halves of an
 /// image by, after it has split the counts.
 ///
 /// The Fourier transform takes an image to repeat, so its opposite edges meet with a jump. A

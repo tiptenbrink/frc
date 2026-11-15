@@ -38,7 +38,7 @@ def one_frc(img: Buffer, seed: int | None = None, tukey_alpha: float = 0.125, ri
     a new seed from the operating system.
 
     Each call makes an FrcPlan, which takes time and memory. For several images of one size,
-    make one FrcPlan and call its one_frc.
+    make one FrcPlan and call its one_image.
     """
 
 def two_frc(img1: Buffer, img2: Buffer, rings: Rings = "nearest") -> memoryview:
@@ -51,7 +51,7 @@ def two_frc(img1: Buffer, img2: Buffer, rings: Rings = "nearest") -> memoryview:
     function applies no window: multiply both images by one first.
 
     Each call makes an FrcPlan, which takes time and memory. For several pairs of images of
-    one size, make one FrcPlan and call its two_frc.
+    one size, make one FrcPlan and call its two_images.
     """
 
 def ring_counts(n: int, rings: Rings = "nearest") -> memoryview:
@@ -95,7 +95,7 @@ class FrcPlan:
         """Counts the frequencies in each ring r < n / 2, as ring_counts(n, rings) does."""
     def resolution(self, curve: Buffer, threshold: str | float = "1/7") -> tuple[float, float] | None:
         """Computes the resolution from a curve of this plan, as the function resolution does."""
-    def one_frc(self, img: Buffer, seed: int | None = None, tukey_alpha: float = 0.125) -> memoryview:
+    def one_image(self, img: Buffer, seed: int | None = None, tukey_alpha: float = 0.125) -> memoryview:
         """Computes the FRC curve of an n x n image of counts, as the function one_frc does."""
-    def two_frc(self, img1: Buffer, img2: Buffer) -> memoryview:
+    def two_images(self, img1: Buffer, img2: Buffer) -> memoryview:
         """Computes the FRC curve of two n x n images, as the function two_frc does."""

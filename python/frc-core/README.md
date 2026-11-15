@@ -12,7 +12,7 @@ frc-core has wheels for Linux (x86_64, glibc 2.28 and later), macOS (Apple Silic
 
 ## Usage
 
-Make an `FrcPlan` for the size of your images, and use it for every image of that size. Pass its `one_frc` a square image of photon counts, after offset and gain correction and before any other processing:
+Make an `FrcPlan` for the size of your images, and use it for every image of that size. Pass its `one_image` a square image of photon counts, after offset and gain correction and before any other processing:
 
 ```python
 import numpy as np
@@ -20,14 +20,14 @@ import frc_core
 
 img = np.random.default_rng(0).poisson(100, (1024, 1024))
 plan = frc_core.FrcPlan(1024)
-curve = np.asarray(plan.one_frc(img, seed=1))
+curve = np.asarray(plan.one_image(img, seed=1))
 found = plan.resolution(curve)  # (resolution in pixels, threshold), or None
 ```
 
 `FrcPlan(n, rings="nearest")` holds the Fourier transform plan and the working memory for images of n × n pixels. Its methods:
 
-- `one_frc(img, seed=None, tukey_alpha=0.125)` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) with alpha `tukey_alpha`, and returns their FRC curve: a float64 value for each ring r < n // 2. `tukey_alpha=0` applies no window.
-- `two_frc(img1, img2)` returns the FRC curve of two images. It applies no window: multiply both images by one first.
+- `one_image(img, seed=None, tukey_alpha=0.125)` splits every count of `img` binomially in two, multiplies both halves by a [Tukey window](https://en.wikipedia.org/wiki/Window_function#Tukey_window) with alpha `tukey_alpha`, and returns their FRC curve: a float64 value for each ring r < n // 2. `tukey_alpha=0` applies no window.
+- `two_images(img1, img2)` returns the FRC curve of two images. It applies no window: multiply both images by one first.
 - `resolution(curve, threshold="1/7")` returns the resolution in pixels and the threshold at the crossing, or `None` if the curve does not drop below the threshold. It finds the first ring whose FRC is below the threshold and interpolates between that ring and the one before it. `threshold` is `"1/7"`, `"half_bit"` or a float.
 - `ring_counts()` returns the number of frequencies in each ring, as uint64 values.
 
@@ -40,11 +40,11 @@ The module also has the functions `one_frc`, `two_frc`, `resolution` and `ring_c
 Without a seed, every call draws a new seed from the operating system. With a seed:
 
 - `binom_split` returns the same samples for the same array on every CPU and any number of threads.
-- `one_frc` returns the same curve for the same image on any number of threads. Between CPUs with different vector instructions, the Fourier transform rounds differently, and a curve differs in its last bits.
+- `one_image` and `one_frc` return the same curve for the same image on any number of threads. Between CPUs with different vector instructions, the Fourier transform rounds differently, and a curve differs in its last bits.
 - `one_frc(img, seed=s, tukey_alpha=0)` is `two_frc(k, img - k)` with `k = binom_split(img, seed=s)`, for a square image.
 
 ## Performance
 
-`FrcPlan.one_frc` of a 4096 x 4096 int32 image takes about 15 ms, and `one_frc`, which also makes the plan, about 25 ms. This was measured on 2026-11-14 through Python, on 8 threads of an AMD EPYC 9V45. Counts that are not int32, and images for `two_frc` that are not float32, are converted first. For a 4096 x 4096 int64 image that adds about 11 ms.
+`FrcPlan.one_image` of a 4096 x 4096 int32 image takes about 15 ms, and `one_frc`, which also makes the plan, about 25 ms. This was measured on 2026-11-14 through Python, on 8 threads of an AMD EPYC 9V45. Counts that are not int32, and images for `two_frc` that are not float32, are converted first. For a 4096 x 4096 int64 image that adds about 11 ms.
 
 frc-core replaces [rustfrc](https://pypi.org/project/rustfrc/), whose last release is 1.2.0.
