@@ -1,6 +1,10 @@
 # frc
 
-frc computes Fourier ring correlation (FRC) curves of microscopy images, and the resolution that follows from them. FRC needs two images of the same object whose noise is independent. frc can also compute it from a single image of photon counts, by splitting every pixel value binomially into two new images with independent Poisson noise [1]. We call FRC from two separately measured images 2FRC, and FRC from one image 1FRC, or single image FRC. In three dimensions, FRC is known as Fourier shell correlation (FSC), the name under which it is mostly used in cryo-EM. frc computes only the two-dimensional FRC.
+frc measures the resolution of microscopy images with Fourier ring correlation (FRC).
+
+For a diffraction-limited microscope, the resolution follows from the optics: by Abbe's formula, it is the wavelength divided by twice the numerical aperture. Super-resolution methods, such as STED and localization microscopy, go beyond this limit, and their resolution also depends on other parameters, such as the intensity of the STED beam. FRC instead determines the resolution from the images themselves, without detailed knowledge of the optical setup [2]. It compares two images of the same object with independent noise, and finds the spatial frequency up to which the two images still agree.
+
+It is not always possible to measure two such images, and many images were made without this in mind. frc can therefore also compute the FRC of a single image of photon counts. It splits every pixel value binomially into two new images with independent Poisson noise [1]. We call FRC from two separately measured images 2FRC, and FRC from one image 1FRC, or single image FRC. In three dimensions, FRC is known as Fourier shell correlation (FSC), the name under which it is mostly used in cryo-EM. frc computes only the two-dimensional FRC.
 
 frc was originally written for a bachelor thesis on 1FRC at Delft University of Technology [6]. The 1FRC method itself is due to B. Rieger and S. Stallinga, and is described in [1].
 
