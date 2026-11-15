@@ -166,9 +166,9 @@ fn binom_split<'py>(
 /// because the split gives two independent images only of Poisson counts, and a count
 /// multiplied by a window is not one.
 ///
-/// rings says which frequencies f make up ring r. With "nearest", ring r holds those whose
-/// distance |f| from the origin rounds to r, and its frequencies lie around r. With "floor", it
-/// holds those with r <= |f| < r + 1, as DIPlib's RadialSum and frc 0.1 and 0.2 bin them.
+/// rings says which frequencies f make up ring r. With "nearest", ring r holds the frequencies
+/// whose distance |f| from the origin rounds to r. With "floor", it holds those with
+/// r ≤ |f| < r + 1, as DIPlib's RadialSum bins them and as earlier versions of frc did.
 ///
 /// The same image, seed and tukey_alpha give the same curve. Without a seed, every call draws
 /// a new seed from the operating system.

@@ -1,23 +1,22 @@
 //! Which frequencies make up each ring of an FRC curve.
 
-/// The frequencies that make up each ring r of an FRC curve, by their distance |f| from the
-/// origin, in pixels of the spectrum.
+/// Which frequencies f make up each ring r of an FRC curve.
 ///
-/// A curve's value r is plotted at the frequency r / n. With [`Rings::Nearest`], the frequencies
-/// of ring r lie around |f| = r. With [`Rings::Floor`], they lie from r up to r + 1, and on
-/// average about half a ring above r: the curve then puts each value at a lower frequency than
-/// the frequencies it measured, and the resolution comes out coarser.
+/// A frequency belongs to a ring by its distance |f| from the origin, in pixels of the spectrum.
+/// Value r of a curve is placed at the spatial frequency r / n. With [`Rings::Nearest`], the
+/// frequencies of ring r lie around |f| = r. With [`Rings::Floor`], they lie between r and
+/// r + 1, on average about half a ring above r. The curve then places each ring at a lower
+/// frequency than the frequencies it holds, and the resolution comes out coarser.
 ///
 /// The default is [`Rings::Nearest`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Rings {
-    /// Ring r holds the frequencies whose distance |f| rounds to r: those with
-    /// r - 1/2 <= |f| < r + 1/2.
+    /// Ring r holds the frequencies whose distance |f| rounds to r, which are those with
+    /// r - 1/2 ≤ |f| < r + 1/2.
     #[default]
     Nearest,
-    /// Ring r holds the frequencies whose distance |f| rounds down to r: those with
-    /// r <= |f| < r + 1. These are the bins of DIPlib's `RadialSum`, which frc 0.1 and 0.2
-    /// used.
+    /// Ring r holds the frequencies with r ≤ |f| < r + 1, as DIPlib's `RadialSum` bins them.
+    /// Earlier versions of frc used these rings.
     Floor,
 }
 

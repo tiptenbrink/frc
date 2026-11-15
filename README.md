@@ -55,11 +55,11 @@ This only holds if the pixel values are Poisson-distributed photon counts. Camer
 - Any processing before the split, such as filtering, deconvolution or reconstruction, mixes the noise of neighbouring pixels. The two halves of the split are then no longer independent. Rieger et al. write: "It is imperative to split the image data in the processing pipeline when Poisson statistics applies. This is at the raw data level, after gain and offset correction." [1]
 - A window multiplies each count by a weight w between 0 and 1, which acts like a gain of w. By equation 31 of [1], the plateau is then (w − 1)/(w + 1), which is below 0. This is why `one_frc` applies its window after the split.
 
-## Differences from frc 0.1 and 0.2
+## Differences from earlier versions
 
-frc 0.1 and 0.2 made three choices that shift the resolution by one to a few percent. frc still makes these choices by default, so that it reproduces earlier results. frc-core and the Rust crate make the new choices by default.
+Earlier versions of frc made three choices that shift the resolution by one to a few percent. frc still makes these choices by default, so that it reproduces earlier results. frc-core and the Rust crate make the new choices by default.
 
-| | frc 0.1 and 0.2 | Now | Effect of the old choice on the resolution |
+| | Earlier versions | Now | Effect of the old choice on the resolution |
 |---|---|---|---|
 | Window | applied by you, before the split | applied by `one_frc` to both halves, after the split (`tukey_alpha`) | 0.6 to 1% coarser at 10 to 200 counts per pixel, up to a factor 2 below 1 count per pixel |
 | Rings | `rings="floor"` | `rings="nearest"` | about 1% coarser |
@@ -81,7 +81,7 @@ This repository holds three packages, which are released together under one vers
 | [`frc-core`](python/frc-core) | [PyPI](https://pypi.org/project/frc-core/) | The compiled core of frc, without dependencies. It takes any array that supports the buffer protocol and returns `memoryview`s. It replaces rustfrc. |
 | [`frc`](crates/frc) | [crates.io](https://crates.io/crates/frc) | The Rust library that both Python packages are built from. |
 
-`one_frc` of a 4096 × 4096 image takes about 15 to 25 ms from Python, on 8 threads of an AMD EPYC 9V45 (measured in November 2026). frc 0.2 took about a second.
+`one_frc` of a 4096 × 4096 image takes about 15 to 25 ms from Python, on 8 threads of an AMD EPYC 9V45 (measured in November 2026). Earlier versions of frc took about a second.
 
 ## References
 

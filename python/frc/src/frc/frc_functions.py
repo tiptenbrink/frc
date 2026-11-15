@@ -35,13 +35,13 @@ def two_frc(img1: Img, img2: Img, rings: str = "floor") -> np.ndarray:
 
     :param img1: The first image.
     :param img2: The second image.
-    :param rings: Which frequencies f make up ring r of the curve. 'floor',
-    the default, takes those with r <= |f| < r + 1, as frc 0.1 and 0.2
-    did with DIPlib's RadialSum. 'nearest' takes those whose distance |f|
-    from the origin rounds to r. The frequencies of a 'floor' ring lie
-    about half a ring above r, where frc_res puts its value, and the
-    resolution comes out coarser, by about 1% in a simulation. Pass the
-    same rings to frc_res.
+    :param rings: Which frequencies f make up ring r of the curve. With
+    'nearest', ring r holds the frequencies whose distance |f| from the
+    origin rounds to r. With 'floor', the default, it holds those with
+    r ≤ |f| < r + 1, as earlier versions did with DIPlib's RadialSum. The
+    frequencies of a 'floor' ring lie on average half a ring above r, but
+    the curve places the ring at r. In a simulation, this made the
+    resolution about 1% coarser. Pass the same rings to frc_res.
     :return: A 1D array with the FRC of each ring r < n / 2 of the n x n
     images. The index is the distance of the ring from the origin, in
     pixels of the Fourier transform.
@@ -72,9 +72,9 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
     variance, and the noise of its two halves correlates, which lowers the
     FRC of every ring.
 
-    Without a tukey_alpha, one_frc applies no window and works as frc 0.1
-    did, for code that windows the image before it calls one_frc. It warns
-    with a NotCountsWarning when the image then holds values that are not
+    Without a tukey_alpha, one_frc applies no window, as in earlier
+    versions, where you windowed the image yourself before the split. It then
+    warns with a NotCountsWarning if the image holds values that are not
     whole numbers.
 
     Method 1 splits the image once: every count c becomes a sample k of
@@ -90,14 +90,15 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
     :param tukey_alpha: The alpha of the Tukey window that both images are
     multiplied by after the split, from 0 to 1: the fraction of each side
     that the two tapers take together, as in apply_tukey. With 0, one_frc
-    applies no window. With None, the default, it works as frc 0.1 did.
-    :param rings: Which frequencies f make up ring r of the curve. 'floor',
-    the default, takes those with r <= |f| < r + 1, as frc 0.1 and 0.2
-    did with DIPlib's RadialSum. 'nearest' takes those whose distance |f|
-    from the origin rounds to r. The frequencies of a 'floor' ring lie
-    about half a ring above r, where frc_res puts its value, and the
-    resolution comes out coarser, by about 1% in a simulation. Pass the
-    same rings to frc_res.
+    applies no window. With None, the default, it applies no window and
+    accepts an image that was windowed before, as earlier versions did.
+    :param rings: Which frequencies f make up ring r of the curve. With
+    'nearest', ring r holds the frequencies whose distance |f| from the
+    origin rounds to r. With 'floor', the default, it holds those with
+    r ≤ |f| < r + 1, as earlier versions did with DIPlib's RadialSum. The
+    frequencies of a 'floor' ring lie on average half a ring above r, but
+    the curve places the ring at r. In a simulation, this made the
+    resolution about 1% coarser. Pass the same rings to frc_res.
     :return: A 1D array with the FRC of each ring r < n / 2 of the n x n
     image. The index is the distance of the ring from the origin, in pixels
     of the Fourier transform.
@@ -117,8 +118,8 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
 
     if tukey_alpha is None and not holds_counts:
         warnings.warn(
-            "img holds values that are not whole numbers, so it is not an image of counts. An image that was "
-            "multiplied by a window is not one either. one_frc split it as frc 0.1 did, which lowers the FRC. "
+            "img holds values that are not whole numbers, such as those of a windowed image, so it does not hold "
+            "photon counts. Splitting such an image lowers the FRC. "
             "Pass the counts as they were measured, with tukey_alpha=0.125, and one_frc applies the window after "
             "the split. To keep this result without the warning, ignore frc.NotCountsWarning with the warnings "
             "module.",
@@ -126,8 +127,8 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
             stacklevel=2,
         )
         if method == 1:
-            # As frc 0.1: the first half is a sample of the truncated values, and the second
-            # half is the rest of the image, with its fractions.
+            # As in earlier versions: the first half is a sample of the truncated values, and the
+            # second half is the rest of the image, with its fractions.
             half1 = np.asarray(frc_core.binom_split(counts, seed))
             return np.asarray(frc_core.two_frc(half1, img - half1, rings))
     if tukey_alpha is not None and not holds_counts:
@@ -197,14 +198,14 @@ def frc_res(xs: np.ndarray, frc_curve: np.ndarray, img_size: int,
     which the curve crosses its threshold.
 
     With crossing="first", frc_res finds the first ring i whose FRC is
-    below its threshold. It draws a straight line through the FRC minus the
-    threshold at rings i - 1 and i, and takes the frequency at which the
-    line is zero. With crossing="band", the default, it collects the rings
-    whose FRC lies within 0.08 of the threshold, and takes the mean
-    frequency of the first group of consecutive ones in which the curve
-    crosses, as frc 0.1 and 0.2 did. That group often reaches past the
-    first crossing, and in a simulation it gave resolutions 2 to 9% finer
-    than the first crossing, with twice its spread between splits.
+    below its threshold. It then interpolates linearly between rings i - 1
+    and i to find the frequency at which the curve crosses the threshold.
+    With crossing="band", the default, it takes the rings whose FRC lies
+    within 0.08 of the threshold, and returns the mean frequency of the
+    first group of consecutive rings in which the curve crosses, as
+    earlier versions did. That group often reaches past the first crossing.
+    In a simulation, it gave resolutions 2 to 9% finer than the first
+    crossing, with twice the spread between splits.
 
     :param xs: The frequency of each value of the curve, in any unit:
     xs[r] for ring r. The resolution comes out in the reciprocal unit.
