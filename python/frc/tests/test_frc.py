@@ -46,6 +46,17 @@ def test_one_frc_sees_the_pattern():
     assert np.median(np.abs(curve[30:])) < 0.15
 
 
+def test_the_first_ring_correlates_exactly():
+    # Ring 0 holds the origin alone. A value just below or just above 1 would decide where
+    # frc_res looks for the half-bit resolution, whose threshold is exactly 1 there.
+    for n in (64, 101, 256):
+        img = pattern_image(n, 80.0, n)
+        assert frc.one_frc(img, seed=1)[0] == 1.0
+        windowed = frc.util.apply_tukey(img.astype(np.float64))
+        other = frc.util.apply_tukey(pattern_image(n, 80.0, n + 1).astype(np.float64))
+        assert frc.two_frc(windowed, other)[0] == 1.0
+
+
 def test_seeds_repeat_curves():
     img = pattern_image(64, 30.0, 2)
     for method in (1, 2):

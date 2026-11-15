@@ -1,18 +1,20 @@
-//! The crate's unsafe code, apart from choosing the sampler's code for the CPU in
-//! `binomial::sample_chunk`: zeroed memory in 2 MiB pages for the spectrum, and stores that write
-//! memory without reading it into the cache first. `lib.rs` denies unsafe code everywhere else.
+//! The crate's unsafe code: zeroed memory in 2 MiB pages for the spectrum, and stores that write
+//! memory without reading it into the cache first. `lib.rs` denies unsafe code everywhere else,
+//! except where `binomial::sample_groups` calls the sampler that is compiled for the CPU's
+//! features.
 #![allow(unsafe_code)]
 
 use std::alloc::{Layout, alloc_zeroed, handle_alloc_error};
 
 use rustfft::num_complex::Complex32;
 
-/// `len` zero Complex32s in memory that the system zeroes as each page is first touched, as
-/// `vec![0.0; len]` does for f32s; `vec!` writes every byte of other types. On Linux it asks for
-/// 2 MiB pages, which Linux gives where transparent huge pages are set to `madvise`, as on most
-/// distributions: faulting in 128 MiB then takes 64 faults instead of 32768, and the passes over
-/// it miss the TLB less.
-pub fn zeroed_complex_vec(len: usize) -> Vec<Complex32> {
+/// Returns `len` zeros in memory that the system zeroes as each page is first touched, as
+/// `vec![0.0; len]` returns for f32s. For other types `vec!` writes every byte.
+///
+/// On Linux this function asks for 2 MiB pages, which Linux gives where transparent huge pages
+/// are set to `madvise`, as most distributions set them. Faulting in 128 MiB then takes 64 faults
+/// instead of 32768, and the passes over the memory miss the TLB less.
+pub(crate) fn zeroed_complex_vec(len: usize) -> Vec<Complex32> {
     let layout = Layout::array::<Complex32>(len).expect("spectrum too large");
     if layout.size() == 0 {
         return Vec::new();
@@ -43,11 +45,21 @@ pub fn zeroed_complex_vec(len: usize) -> Vec<Complex32> {
     unsafe { Vec::from_raw_parts(memory.cast::<Complex32>(), len, len) }
 }
 
-/// Copies `src` to `dst` with streaming stores where `dst` allows them: they write whole cache
-/// lines without reading them from memory first, which a normal store does. Call
-/// `finish_streaming` before anything reads `dst`.
-pub fn copy_streaming(dst: &mut [Complex32], src: &[Complex32]) {
-    assert_eq!(dst.len(), src.len());
+/// Copies `src` to `dst` with streaming stores where `dst` allows them. A streaming store writes
+/// a whole cache line without reading it from memory first, which a normal store does. Call
+/// [`finish_streaming`] before anything reads `dst`.
+///
+/// # Panics
+///
+/// Panics if `dst` and `src` differ in length.
+pub(crate) fn copy_streaming(dst: &mut [Complex32], src: &[Complex32]) {
+    assert_eq!(
+        dst.len(),
+        src.len(),
+        "dst holds {} values and src {}",
+        dst.len(),
+        src.len()
+    );
     #[cfg(target_arch = "x86_64")]
     if (dst.as_ptr() as usize).is_multiple_of(16) && dst.len().is_multiple_of(2) {
         use std::arch::x86_64::{_mm_loadu_ps, _mm_stream_ps};
@@ -64,7 +76,7 @@ pub fn copy_streaming(dst: &mut [Complex32], src: &[Complex32]) {
 
 /// Orders the streaming stores of this thread before whatever it writes or reads next, so that
 /// the threads that read the memory after a rayon join see them.
-pub fn finish_streaming() {
+pub(crate) fn finish_streaming() {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: SSE is part of x86-64.
     unsafe {

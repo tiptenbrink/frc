@@ -27,7 +27,7 @@ use rayon::prelude::*;
 use rustfft::num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 
-use crate::binomial::{NegativeCount, Splitter};
+use crate::binomial::{NegativeCount, Splitter, rows_per_chunk};
 use crate::cpu::CpuFeatures;
 use crate::platform;
 
@@ -56,10 +56,6 @@ impl RingSums {
 /// Pairs of mirrored columns, x and n - x, that one panel of the spectrum holds.
 const PAIRS_PER_PANEL: usize = 8;
 
-/// Values that one task of the row pass reads and transforms, as whole rows: 16 rows at
-/// 4096 x 4096, so that each task writes 16 rows into every panel.
-const ROW_TASK_VALUES: usize = 65536;
-
 /// Complex values between the end of one column and the start of the next in the column buffer:
 /// one cache line. Without it the columns of a 4096 x 4096 spectrum start a multiple of 4 KiB
 /// apart, and the values that one row of a panel adds to them all fall in the same cache set.
@@ -76,9 +72,10 @@ const PANEL_COPY_ROWS: usize = 8;
 /// Rows of a column whose ring terms the column pass computes before it adds them to their rings.
 const TERM_ROWS: usize = 256;
 
-/// The image rows that one task of the row pass takes.
+/// The image rows that one task of the row pass takes: a chunk of the split, so that a task
+/// splits its rows with the generators of one chunk.
 fn rows_per_task(n: usize) -> usize {
-    (ROW_TASK_VALUES / n).max(1)
+    rows_per_chunk(n)
 }
 
 /// A run of adjacent columns of the spectrum in a panel.
@@ -210,6 +207,17 @@ fn add_terms(sum: &mut [f64; 3], terms: [f32; 3]) {
     }
 }
 
+/// Returns the terms of the origin from Z(0), where F1 = Re Z and F2 = Im Z, in f64.
+///
+/// An f64 holds the product of two f32s exactly. The FRC of ring 0, which holds the origin
+/// alone, is therefore exactly 1 for two images with positive sums, and not 1 with a rounding
+/// error of either sign. The half-bit threshold is exactly 1 there too, and frc's search for
+/// the resolution starts from which of the two is larger.
+fn origin_terms(z: Complex32) -> [f64; 3] {
+    let (f1, f2) = (z.re as f64, z.im as f64);
+    [f1 * f2, f1 * f1, f2 * f2]
+}
+
 /// Returns Re(F1 conj F2), |F1|² and |F2|² of a frequency f from Z(f) and Z(-f).
 #[inline(always)]
 fn ring_terms(z: Complex32, z_mirror: Complex32) -> [f32; 3] {
@@ -323,7 +331,7 @@ fn add_panel_ring_sums(
         // Column n / 2 of an even n has |fx| = half, outside every ring.
         PanelColumns::OwnMirrors => {
             let z = column(0);
-            add_terms(&mut sums[half], ring_terms(z[0], z[0]));
+            sums[half] = origin_terms(z[0]);
             // A pair of this column with itself counts every frequency twice.
             add_pair_ring_sums(n, 0, z, z, 0.5, terms, sums);
         }
@@ -424,7 +432,8 @@ impl FrcPlan {
     ///
     /// `counts` holds the n x n image in row-major order. This method splits every count c into
     /// a sample k of binomial(c, 1/2) and c - k, and correlates the two images that result. The
-    /// same counts and seed give the same curve.
+    /// same counts and seed give the same curve: that of [`FrcPlan::two_frc`] for the samples k
+    /// that [`binom_split`](crate::binom_split) draws with the same seed, and the rest c - k.
     ///
     /// # Errors
     ///
@@ -656,22 +665,6 @@ mod tests {
         image
     }
 
-    /// The two images that `one_frc` splits `counts` into with `seed`.
-    fn split_halves(n: usize, counts: &[i32], seed: u64) -> (Vec<f32>, Vec<f32>) {
-        let splitter = Splitter::new(seed, CpuFeatures::Detected);
-        let mut halves = vec![(0.0, 0.0); counts.len()];
-        let task_len = rows_per_task(n) * n;
-        let tasks = counts.chunks(task_len).zip(halves.chunks_mut(task_len));
-        for (task, (counts, halves)) in tasks.enumerate() {
-            splitter
-                .split_chunk(task, counts, halves, |count, k| {
-                    (k as f32, (count - k) as f32)
-                })
-                .unwrap();
-        }
-        halves.into_iter().unzip()
-    }
-
     /// The signed frequency of index i of a DFT of length n.
     fn frequency(i: usize, n: usize) -> i64 {
         if i <= (n - 1) / 2 {
@@ -830,15 +823,17 @@ mod tests {
 
     #[test]
     fn one_frc_is_two_frc_of_its_halves() {
-        for n in [2, 3, 17, 96, 300] {
+        // 300 and 1030 take several chunks of the split, the last one shorter.
+        for n in [2, 3, 17, 96, 300, 1030] {
             let counts = pattern_image(n, 60.0, 5);
-            let (k, rest) = split_halves(n, &counts, 13);
-            assert!(
-                k.iter()
-                    .zip(&rest)
-                    .zip(&counts)
-                    .all(|((k, rest), &count)| k + rest == count as f32)
-            );
+            let mut samples = counts.clone();
+            crate::binom_split(&mut samples, n, 13, CpuFeatures::Detected).unwrap();
+            let k: Vec<f32> = samples.iter().map(|&k| k as f32).collect();
+            let rest: Vec<f32> = counts
+                .iter()
+                .zip(&samples)
+                .map(|(count, k)| (count - k) as f32)
+                .collect();
             let mut plan = FrcPlan::new(n);
             assert_eq!(
                 plan.two_frc_ring_sums(&k, &rest),
@@ -853,6 +848,7 @@ mod tests {
         let n = 512;
         let mut plan = FrcPlan::new(n);
         let frc = plan.one_frc(&pattern_image(n, 100.0, 2), 5).unwrap();
+        assert_eq!(frc[0], 1.0);
         // The weakest wave, at ring 120, stands about 90 times above its ring's noise at this
         // size, and its cross terms with the noise move the FRC by a few percent.
         for r in [5, 19, 51, 120] {

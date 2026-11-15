@@ -156,12 +156,8 @@ def intersection(xs: np.ndarray, ys1_f: Union[np.ndarray, Func1D], ys2_f: Func1D
     the region of interest.
     :return: x and y value of the intersection point, if it can be found.
     """
-
-    if callable(ys1_f):
-        ys1: np.ndarray = ys2_f(xs)
-    else:
-        ys1 = ys1_f
-
+    # A copy, because the first value may change below.
+    ys1 = np.array(ys1_f(xs) if callable(ys1_f) else ys1_f, dtype=np.float64)
     ys2: np.ndarray = ys2_f(xs)
     max_ys1 = np.amax(ys1)
     max_ys2 = np.amax(ys2)

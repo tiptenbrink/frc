@@ -8,7 +8,7 @@ frc now computes the FRC in Rust, and this repository releases three packages at
 
 - The Python package `frc-core`: the compiled core of frc, without dependencies. Its functions take any array that supports the buffer protocol, of booleans, integers or floats in native byte order, and return `memoryview`s: `binom_split(a, seed=None)`, `one_frc(img, seed=None)`, `two_frc(img1, img2)`, `ring_counts(n)` and `FrcPlan(n)`, whose `one_frc` and `two_frc` reuse its FFT plans and buffers for images of one size. It has type stubs, and wheels for CPython 3.11 and later through the stable ABI and for free-threaded CPython 3.15t and later.
 - The Rust crate `frc`, which frc-core is built from: `binom_split`, `FrcPlan` with `one_frc`, `two_frc` and their ring sums, and `ring_counts`.
-- A `seed` for `one_frc`. With a seed, the same image gives the same curve on every CPU and any number of threads; without one, every call splits with a fresh seed.
+- A `seed` for `one_frc`. With a seed, the same image gives the same curve on any number of threads: that of `two_frc` for the two halves that `frc_core.binom_split` makes with the same seed. Without one, every call splits with a new seed.
 - `utility.tukey_window(length, alpha)`, the one-dimensional window that `tukey_square` uses.
 - Support for Python 3.15 and free-threaded 3.15t.
 
@@ -21,6 +21,12 @@ frc now computes the FRC in Rust, and this repository releases three packages at
 - `tukey_square` computes its window with NumPy, as SciPy did.
 - frc no longer caps the Python version.
 - frc is licensed under MIT or Apache-2.0, at your option, instead of MIT alone, as are frc-core and the crate frc.
+
+### Fixed
+
+- The FRC of the first ring, which holds the origin alone, is exactly 1. Earlier versions returned 1 with a rounding error of either sign, and `frc_res` with `threshold='half_bit'` found another resolution, or none, when the value fell below 1.
+- `utility.intersection` evaluates a first curve that is passed as a function. It evaluated the second curve in its place.
+- `utility.intersection` and `frc_res` no longer change the first value of the curve that they are given when the curve starts on its threshold.
 
 ### Removed
 

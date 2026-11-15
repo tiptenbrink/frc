@@ -38,7 +38,7 @@ fn split(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| {
                 out.copy_from_slice(&image);
-                binom_split(black_box(&mut out), SEED, CpuFeatures::Detected).unwrap()
+                binom_split(black_box(&mut out), n, SEED, CpuFeatures::Detected).unwrap()
             })
         });
     }

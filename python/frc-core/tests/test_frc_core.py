@@ -64,6 +64,16 @@ def test_two_frc_of_the_halves_of_a_split_sees_the_pattern():
     assert np.all(curve[[5, 19]] > 0.8)
 
 
+@pytest.mark.parametrize("n", [64, 300, 1030])
+def test_one_frc_is_two_frc_of_the_halves_that_binom_split_makes(n):
+    img = pattern_image(n, 50.0, 7)
+    half = np.asarray(frc_core.binom_split(img, seed=11))
+    assert frc_core.one_frc(img, seed=11) == frc_core.two_frc(half, img - half)
+    # Another element type and a view with strides hold the same image.
+    assert np.array_equal(frc_core.binom_split(img.astype(np.uint16), seed=11), half)
+    assert np.array_equal(frc_core.binom_split(img.T, seed=11), frc_core.binom_split(np.ascontiguousarray(img.T), seed=11))
+
+
 def test_two_frc_of_an_image_with_itself_is_one():
     img = pattern_image(32, 50.0, 6).astype(np.float64)
     assert np.allclose(frc_core.two_frc(img, img), 1.0)

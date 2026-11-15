@@ -52,3 +52,20 @@ def test_gaussf_is_diplibs():
     got = frc.util.gaussf(img, 1)
     assert np.allclose(got[:2], want_first_rows, rtol=0, atol=1e-11)
     assert got[4, 4] == pytest.approx(0.159241125691, abs=1e-11)
+
+
+def test_intersection_takes_the_first_curve_as_a_function():
+    xs = np.arange(100) / 100
+    x, y = frc.util.intersection(xs, lambda x: 1 - x, lambda x: x * 0 + 0.25)
+    assert x == pytest.approx(0.75, abs=0.01)
+    assert y == pytest.approx(0.25)
+
+
+def test_intersection_leaves_the_curve_as_it_was():
+    xs = np.arange(50) / 50
+    # A curve that starts on its threshold.
+    curve = 0.5 - xs
+    before = curve.copy()
+    x, _ = frc.util.intersection(xs, curve, lambda x: x * 0 + 0.5)
+    assert x == pytest.approx(0.01)
+    assert np.array_equal(curve, before)

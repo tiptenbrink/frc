@@ -57,8 +57,9 @@ fn memoryview_of<'py, T: buffers::OutputElement>(
 /// Poisson-distributed with mean m, then k and c - k are independent and Poisson-distributed
 /// with mean m / 2.
 ///
-/// The same counts and seed give the same samples on every CPU. Without a seed, every call
-/// draws a new seed from the operating system.
+/// The same array and seed give the same samples on every CPU. For a square image they are
+/// the samples that one_frc draws with the same seed, so one_frc(img, seed) is
+/// two_frc(k, img - k). Without a seed, every call draws a new seed from the operating system.
 #[pyfunction]
 #[pyo3(signature = (a, seed=None))]
 fn binom_split<'py>(
@@ -68,19 +69,25 @@ fn binom_split<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let input = InputBuffer::get(a, "a")?;
     let shape = input.shape().to_vec();
+    // The rows of an array of two or more dimensions lie along its last axis.
+    let row_len = match shape[..] {
+        [.., last] if shape.len() >= 2 => last.max(1),
+        _ => 1,
+    };
     let seed = call_seed(seed);
     new_memoryview::<i32>(py, &shape, |out| {
         input.write_counts(out)?;
-        frc::binom_split(out, seed, frc::CpuFeatures::Detected)
+        frc::binom_split(out, row_len, seed, frc::CpuFeatures::Detected)
             .map_err(|_| input.invalid_count_error())
     })
 }
 
 /// Computes the Fourier ring correlation curve of one square image of counts.
 ///
-/// Splits every count c of the image into a sample k of binomial(c, 0.5) and c - k, and
-/// correlates the two images that result, as two_frc does. Returns a memoryview of float64
-/// values, one for each ring r < n / 2 of the n x n image.
+/// Splits every count c of the image into a sample k of binomial(c, 0.5) and c - k, as
+/// binom_split does with the same seed, and correlates the two images that result, as two_frc
+/// does. Returns a memoryview of float64 values, one for each ring r < n / 2 of the n x n
+/// image.
 ///
 /// The same image and seed give the same curve. Without a seed, every call draws a new seed
 /// from the operating system.
