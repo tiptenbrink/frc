@@ -34,19 +34,19 @@ With `binning="nearest"`, ring r holds the frequencies whose distance from the o
 
 To find the resolution from a curve without a plan, make `frc.Rings(n, binning="nearest")` for the size of the image. It needs no Fourier transform, and its `first_crossing` is the plan's.
 
-`frc.util` holds `apply_tukey`, `tukey_square`, `tukey_window`, `square_image`, `gaussf` and `intersection`.
+`frc.util` holds `apply_tukey`, `tukey_square`, `tukey_window`, `square_image` and `gaussf`, and also `intersection`, the band crossing of `frc_res`, which belongs to the legacy API.
 
 ## Legacy API
 
 The functions `one_frc`, `two_frc`, `half_bit_threshold` and `frc_res` are the API of earlier versions of frc. They are defined in `frc.legacy`, and `frc` imports them, so `frc.one_frc` still works. They keep its defaults, so that earlier results can be reproduced. Each default shifts the resolution by one to a few percent:
 
-- `one_frc(img, method=1, seed=None, tukey_alpha=None, binning="floor")` applies no window unless you pass `tukey_alpha`. In earlier versions, you windowed the image yourself before the split, which makes the resolution slightly coarser. With `tukey_alpha`, `one_frc` windows both halves after the split, as `FrcPlan` does. Method 2 splits the image twice, independently.
+- `one_frc(img, method=1, seed=None, binning="floor")` applies no window. As in earlier versions, you window the image yourself before the split, which makes the resolution slightly coarser. `FrcPlan.one_image` windows both halves after the split. Method 2 splits the image twice, independently.
 - `binning` is `"floor"`, which places ring r about half a ring too low. Pass `binning="nearest"` for rings centred on r. `two_frc(img1, img2, binning="floor")` takes the same argument.
 - `frc_res(xs, frc_curve, img_size, threshold=None, binning="floor")` estimates the crossing from a band of rings around the threshold, as earlier versions did. That often gives a slightly finer resolution than the first crossing, which `FrcPlan.first_crossing` interpolates. `frc_res` also takes `xs` in any unit of frequency, and a threshold that is a function of the frequency.
 
 The [repository's README](https://github.com/tiptenbrink/frc#differences-from-earlier-versions) gives the size of each effect and how it was measured.
 
-When `one_frc` splits an image whose values are not whole numbers, such as a windowed image, it warns with a `frc.NotCountsWarning`. With `tukey_alpha`, it refuses such an image. To keep the results of a windowed image without the warning, switch it off:
+When `one_frc` splits an image whose values are not whole numbers, such as a windowed image, it warns with a `frc.NotCountsWarning`. To keep the results of a windowed image without the warning, switch it off:
 
 ```python
 import warnings

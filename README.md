@@ -56,7 +56,7 @@ This only holds if the pixel values are Poisson-distributed photon counts. Camer
 
 ## Differences from earlier versions
 
-Earlier versions of frc made three choices that shift the resolution by one to a few percent. `FrcPlan`, frc-core and the Rust crate make the new choices. The legacy functions `one_frc`, `two_frc` and `frc_res` of frc keep the old choices by default, so that they reproduce earlier results. `one_frc` and `two_frc` make the first two new choices with `tukey_alpha` and `binning="nearest"`. `frc_res` always uses the band of earlier versions.
+Earlier versions of frc made three choices that shift the resolution by one to a few percent. `FrcPlan`, frc-core and the Rust crate make the new choices. The legacy functions `one_frc`, `two_frc` and `frc_res` of frc keep the old choices by default, so that they reproduce earlier results. `one_frc` and `two_frc` take `binning="nearest"` for the new rings. `one_frc` applies no window, and `frc_res` always uses the band of earlier versions.
 
 | | Earlier versions | Now | Effect of the old choice on the resolution |
 |---|---|---|---|

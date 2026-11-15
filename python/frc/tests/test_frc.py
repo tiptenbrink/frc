@@ -26,7 +26,7 @@ def test_half_bit_threshold():
 def test_frc_res_half_bit():
     rng = np.random.default_rng(0)
     img = rng.poisson(50, (64, 64))
-    frc_curve = frc.one_frc(img, tukey_alpha=0.125)
+    frc_curve = frc.one_frc(img)
     xs = np.arange(len(frc_curve)) / img.shape[0]
 
     try:
@@ -67,22 +67,17 @@ def test_seeds_repeat_curves():
 
 
 @pytest.mark.parametrize("method", [1, 2])
-def test_one_frc_windows_both_halves_after_the_split(method):
+def test_one_frc_applies_no_window(method):
     counts = pattern_image(64, 40.0, 3)
-    curve = frc.one_frc(counts, method, seed=4, tukey_alpha=0.125)
+    curve = frc.one_frc(counts, method, seed=4)
     if method == 1:
         half = np.asarray(frc_core.binom_split(counts, seed=4))
-        want = frc.two_frc(frc.util.apply_tukey(half), frc.util.apply_tukey(counts - half))
-        # frc-core multiplies in float32.
-        assert np.allclose(curve, want, atol=1e-5)
+        assert np.array_equal(curve, frc.two_frc(half, counts - half))
     assert curve[5] > 0.9 and curve[19] > 0.8
-    assert not np.allclose(curve, frc.one_frc(counts, method, seed=4, tukey_alpha=0), atol=1e-5)
     # Counts in floats are counts, and nothing warns.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert np.array_equal(frc.one_frc(counts.astype(np.float64), method, seed=4, tukey_alpha=0.125), curve)
-        assert np.array_equal(frc.one_frc(counts.astype(np.float64), method, seed=4), frc.one_frc(counts, method, seed=4))
-        assert np.array_equal(frc.one_frc(counts, method, seed=4), frc.one_frc(counts, method, seed=4, tukey_alpha=0))
+        assert np.array_equal(frc.one_frc(counts.astype(np.float64), method, seed=4), curve)
 
 
 def test_windowed_images_are_split_as_in_frc_0_1_with_a_warning():
@@ -106,13 +101,9 @@ def test_windowed_images_are_split_as_in_frc_0_1_with_a_warning():
         assert np.array_equal(frc.one_frc(windowed, 2, seed=6), curve)
 
 
-def test_windowed_images_are_refused_with_a_tukey_alpha():
-    windowed = frc.util.apply_tukey(pattern_image(32, 40.0, 7))
-    for method in (1, 2):
-        with pytest.raises(ValueError, match="not whole numbers"):
-            frc.one_frc(windowed, method, tukey_alpha=0.125)
+def test_one_frc_refuses_an_unknown_method():
     with pytest.raises(ValueError, match="method"):
-        frc.one_frc(windowed, 3)
+        frc.one_frc(pattern_image(32, 40.0, 7), 3)
 
 
 def test_the_binning_is_floor_unless_asked_for_nearest():
@@ -121,14 +112,14 @@ def test_the_binning_is_floor_unless_asked_for_nearest():
     floor, nearest = frc_core.FrcPlan(64, "floor"), frc_core.FrcPlan(64)
     assert np.array_equal(frc.one_frc(counts, seed=2), np.asarray(floor.one_image(counts, 2, 0.0)))
     assert np.array_equal(
-        frc.one_frc(counts, seed=2, tukey_alpha=0.125, binning="nearest"), np.asarray(nearest.one_image(counts, 2))
+        frc.one_frc(counts, seed=2, binning="nearest"), np.asarray(nearest.one_image(counts, 2, 0.0))
     )
     assert np.array_equal(frc.two_frc(floats, floats[::-1]), np.asarray(floor.two_images(floats, floats[::-1])))
     assert np.array_equal(
         frc.two_frc(floats, floats[::-1], binning="nearest"), np.asarray(nearest.two_images(floats, floats[::-1]))
     )
     # The waves at |f| = 5.83 and 19.24 lie in rings 6 and 19 with "nearest" rings.
-    curve = frc.one_frc(counts, seed=2, tukey_alpha=0.125, binning="nearest")
+    curve = frc.one_frc(counts, seed=2, binning="nearest")
     assert curve[6] > 0.9 and curve[19] > 0.8
     for method in (1, 2):
         assert not np.array_equal(
@@ -143,14 +134,14 @@ def test_the_half_bit_threshold_follows_the_binning():
     floor, nearest = half_bit_threshold(64)(xs), half_bit_threshold(64, "nearest")(xs)
     # Ring 2 holds 16 frequencies with "floor" rings and 12 with "nearest" rings.
     assert floor[0] == nearest[0] and floor[2] < nearest[2]
-    curve = frc.one_frc(pattern_image(64, 40.0, 9), seed=3, tukey_alpha=0.125, binning="nearest")
+    curve = frc.one_frc(pattern_image(64, 40.0, 9), seed=3, binning="nearest")
     _, _, threshold = frc.frc_res(xs, curve, 64, "half_bit", binning="nearest")
     assert np.array_equal(threshold(xs), nearest)
 
 
 def test_the_half_bit_resolution_does_not_depend_on_the_unit_of_xs():
     n = 128
-    curve = frc.one_frc(pattern_image(n, 30.0, 10), seed=4, tukey_alpha=0.125, binning="nearest")
+    curve = frc.one_frc(pattern_image(n, 30.0, 10), seed=4, binning="nearest")
     xs = np.arange(len(curve)) / n
     for threshold in ("1/7", "half_bit"):
         in_pixels = frc.frc_res(xs, curve, n, threshold, binning="nearest")

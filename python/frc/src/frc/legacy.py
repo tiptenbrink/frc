@@ -13,17 +13,15 @@ import frc_core
 import numpy as np
 
 import frc._internal_utility as _util
-import frc.utility as frc_util
-from frc.deps_types import Func1D, Img
+from frc.deps_types import Func1D, Img, NoIntersectionException
 
 __all__ = ['one_frc', 'two_frc', 'half_bit_threshold', 'frc_res', 'NotCountsWarning']
 
 
 class NotCountsWarning(UserWarning):
-    """The warning of one_frc without a tukey_alpha for an image that holds
-    values that are not whole numbers, such as an image that was multiplied
-    by a window. To switch it off, ignore this class with the warnings
-    module."""
+    """The warning of one_frc for an image that holds values that are not
+    whole numbers, such as an image that was multiplied by a window. To
+    switch it off, ignore this class with the warnings module."""
 
 
 def two_frc(img1: Img, img2: Img, binning: str = "floor") -> np.ndarray:
@@ -67,29 +65,24 @@ def two_frc(img1: Img, img2: Img, binning: str = "floor") -> np.ndarray:
     return np.asarray(frc_core.FrcPlan(img1.shape[0], binning).two_images(img1, img2))
 
 
-def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: float | None = None,
-            binning: str = "floor") -> np.ndarray:
+def one_frc(img: Img, method: int = 1, seed: int | None = None, binning: str = "floor") -> np.ndarray:
     """
     Computes the FRC curve of one image of counts.
 
     This function belongs to the legacy API, which keeps the defaults of
     earlier versions of frc. For new code, use FrcPlan.
 
-    Pass a square 2D image of the counts as they were measured, and a
-    tukey_alpha, such as 0.125. one_frc splits the counts in two images,
-    multiplies both by a Tukey window, so that their edges leave no
-    artifacts in the Fourier transforms, and correlates them.
-
-    The window must come after the split. The split gives two independent
-    images only of Poisson counts, whose variance is their mean. A count
-    that a window has scaled by w has w times the mean and w * w times the
-    variance, and the noise of its two halves correlates, which lowers the
-    FRC of every ring.
-
-    Without a tukey_alpha, one_frc applies no window, as in earlier
-    versions, where you windowed the image yourself before the split. It then
+    Pass a square 2D image of counts. one_frc splits the counts in two
+    images and correlates them. It applies no window, as in earlier
+    versions, where you windowed the image yourself before the split. It
     warns with a NotCountsWarning if the image holds values that are not
-    whole numbers.
+    whole numbers, as a windowed image does.
+
+    A window before the split lowers the FRC. The split gives two
+    independent images only of Poisson counts, whose variance is their mean.
+    A count that a window has scaled by w has w times the mean and w * w
+    times the variance, and the noise of its two halves correlates.
+    FrcPlan.one_image applies the window after the split.
 
     Method 1 splits the image once: every count c becomes a sample k of
     binomial(c, 0.5) in one image and c - k in the other. Method 2 splits
@@ -101,11 +94,6 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
     :param seed: A seed for the split, from 0 to 2**64 - 1. The same image
     and seed give the same curve. Without a seed, every call splits with a
     new seed from the operating system.
-    :param tukey_alpha: The alpha of the Tukey window that both images are
-    multiplied by after the split, from 0 to 1: the fraction of each side
-    that the two tapers take together, as in apply_tukey. With 0, one_frc
-    applies no window. With None, the default, it applies no window and
-    accepts an image that was windowed before, as earlier versions did.
     :param binning: Which frequencies f make up ring r of the curve. With
     'nearest', ring r holds the frequencies whose distance |f| from the
     origin rounds to r. With 'floor', the default, it holds those with
@@ -116,8 +104,6 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
     :return: A 1D array with the FRC of each ring r < n / 2 of the n x n
     image. The index is the distance of the ring from the origin, in pixels
     of the Fourier transform.
-    :raises ValueError: If tukey_alpha is given and the image holds values
-    that are not whole numbers.
     """
     img = np.asarray(img)
     if img.ndim != 2 or img.shape[0] != img.shape[1]:
@@ -127,13 +113,12 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
     counts, holds_counts = _util.counts_of(img)
     plan = frc_core.FrcPlan(img.shape[0], binning)
 
-    if tukey_alpha is None and not holds_counts:
+    if not holds_counts:
         warnings.warn(
             "img holds values that are not whole numbers, such as those of a windowed image, so it does not hold "
             "photon counts. Splitting such an image lowers the FRC. "
-            "Pass the counts as they were measured, with tukey_alpha=0.125, and one_frc applies the window after "
-            "the split. To keep this result without the warning, ignore frc.NotCountsWarning with the warnings "
-            "module.",
+            "Pass the counts as they were measured to FrcPlan.one_image, which applies the window after the split. "
+            "To keep this result without the warning, ignore frc.NotCountsWarning with the warnings module.",
             NotCountsWarning,
             stacklevel=2,
         )
@@ -142,18 +127,11 @@ def one_frc(img: Img, method: int = 1, seed: int | None = None, tukey_alpha: flo
             # second half is the rest of the image, with its fractions.
             half1 = np.asarray(frc_core.binom_split(counts, seed))
             return np.asarray(plan.two_images(half1, img - half1))
-    if tukey_alpha is not None and not holds_counts:
-        raise ValueError(
-            "img holds values that are not whole numbers, but one_frc with a tukey_alpha splits counts. Pass the "
-            "counts as they were measured, without a window. Round counts that were converted from camera units."
-        )
 
     if method == 1:
-        return np.asarray(plan.one_image(counts, seed, tukey_alpha or 0.0))
+        return np.asarray(plan.one_image(counts, seed, 0.0))
     seeds = (None, None) if seed is None else np.random.SeedSequence(seed).generate_state(2, np.uint64).tolist()
     halves = [np.asarray(frc_core.binom_split(counts, seed)) for seed in seeds]
-    if tukey_alpha:
-        halves = [frc_util.apply_tukey(half, tukey_alpha) for half in halves]
     return np.asarray(plan.two_images(*halves))
 
 
@@ -201,6 +179,65 @@ def half_bit_threshold(img_size: int, binning: str = "floor") -> Func1D:
     return threshold_at
 
 
+def intersection(xs: np.ndarray, ys1_f: np.ndarray | Func1D, ys2_f: Func1D, tol=0.08):
+    """
+    Finds the first point at which a curve crosses a second curve, such as
+    the point at which an FRC curve crosses its threshold.
+
+    The function evaluates both curves at xs. It then collects the indices
+    at which the first curve is within a tolerance of the second, the
+    indices just before the first curve crosses the second, and the indices
+    just after. The tolerance is tol times the largest value of both curves.
+    It splits these indices into groups of consecutive ones, and takes the
+    first group in which the first curve is both at or above and at or below
+    the second. The intersection is at the mean of the group's xs, which is
+    accurate if xs are evenly spaced.
+
+    The two curves do not play the same role: swapping them can give
+    another point.
+
+    :param xs: The x values of both curves.
+    :param ys1_f: The first curve, as its values at xs or as a function.
+    :param ys2_f: The second curve, as a function.
+    :param tol: The tolerance, as a fraction of the largest value of both
+    curves.
+    :return: The x of the intersection, and the value of the second curve
+    there.
+    :raises NoIntersectionException: If no group of indices holds a
+    crossing.
+    """
+    # A copy, because the first value may change below.
+    ys1 = np.array(ys1_f(xs) if callable(ys1_f) else ys1_f, dtype=np.float64)
+    ys2: np.ndarray = ys2_f(xs)
+    tolerance = tol * max(np.amax(ys1), np.amax(ys2))
+
+    close_indices = np.asarray((ys1 < ys2 + tolerance) & (ys1 > ys2 - tolerance)).nonzero()[0]
+    next_y = np.diff(ys1)
+    thres_y = (ys2 - ys1)[:-1]
+
+    # A first curve that starts on the second one starts above it instead, so
+    # that the crossings below go downwards.
+    if ys1[0] == ys2[0]:
+        ys1[0] += tolerance * 0.5
+
+    if ys1[0] > ys2[0]:
+        # The first curve comes from above: it crosses where its next step
+        # down is larger than its distance to the second curve.
+        crossings = np.asarray((next_y < thres_y) & (thres_y < 0)).nonzero()[0]
+    else:
+        crossings = np.asarray((next_y > thres_y) & (thres_y > 0)).nonzero()[0]
+
+    of_interest = np.unique(np.concatenate((close_indices, crossings, crossings + 1)))
+
+    for group in _util.separate_noncontiguous(of_interest):
+        difference: np.ndarray = ys1[group] - ys2[group]
+        if np.any(difference >= 0) and np.any(difference <= 0):
+            x = np.average(xs[group])
+            return x, ys2_f(x)
+
+    raise NoIntersectionException("the curve does not cross its threshold")
+
+
 def frc_res(xs: np.ndarray, frc_curve: np.ndarray, img_size: int,
             threshold: str | Func1D | None = None, binning: str = "floor") -> tuple[float, float, Func1D]:
     """
@@ -246,5 +283,5 @@ def frc_res(xs: np.ndarray, frc_curve: np.ndarray, img_size: int,
     else:
         raise ValueError(f"threshold is {threshold!r}, but must be '1/7', 'half_bit' or a function.")
 
-    intersect_x, intersect_y = frc_util.intersection(xs, frc_curve, threshold_f)
+    intersect_x, intersect_y = intersection(xs, frc_curve, threshold_f)
     return 1. / intersect_x, intersect_y, threshold_f
