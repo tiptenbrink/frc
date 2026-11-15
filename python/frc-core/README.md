@@ -1,20 +1,18 @@
 # frc-core
 
-frc-core is the compiled core of [`frc`](https://pypi.org/project/frc/), a Python library for Fourier Ring Correlation (FRC) and resolution determination in microscopy. It has no dependencies: it takes any array that supports the buffer protocol, such as a NumPy array, an `array.array` or a `memoryview`, and returns a `memoryview`, which `numpy.asarray` wraps without copying it. For an API that takes and returns NumPy arrays, with thresholds and resolution, use `frc`. For Rust, the same code is the crate [`frc`](https://crates.io/crates/frc).
+frc-core computes Fourier ring correlation (FRC) curves of microscopy images, and splits images of photon counts binomially in two, in compiled code. It is the core of the Python library [frc](https://pypi.org/project/frc/), which adds thresholds and the resolution on NumPy arrays. The [repository's README](https://github.com/tiptenbrink/frc#readme) explains the method and which papers to cite.
 
-frc-core has wheels for Windows (x86_64), macOS (universal2, which runs on both Apple Silicon and Intel) and Linux (x86_64, glibc 2.28 and later). One wheel per platform covers CPython 3.11 and later, through the stable ABI, and one free-threaded CPython 3.15t and later, so a new Python version needs no new release. On other platforms, pip builds frc-core from the sdist, which needs a Rust toolchain.
+frc-core has no dependencies. Its functions take any array that supports the buffer protocol, such as a NumPy array, an `array.array` or a `memoryview`. They return a `memoryview`, which `numpy.asarray` wraps without a copy.
 
-frc-core replaces rustfrc, whose last release is 1.2.0. Its API is the one that was planned for rustfrc 2.0.
+## Installation
 
-## Features
+In a project managed by [uv](https://docs.astral.sh/uv/), run `uv add frc-core`. Otherwise run `pip install frc-core`.
 
-- `binom_split(a, seed=None)` replaces every count n of an array of non-negative integers with a sample k of binomial(n, 0.5), in an int32 array of the same shape. It counts the ones among n random bits, from 16 xoshiro256++ generators at once, with AVX-512 or AVX2 when the CPU has them. A Poisson-distributed count with mean λ becomes one with mean λ / 2, and so does n - k, independently of k.
-- `one_frc(img, seed=None)` computes the FRC curve of a square image of counts from that one image: it splits every count with `binom_split`, Fourier transforms both halves, and correlates them over rings of equal distance from the origin. Ring r holds the frequencies f with r <= |f| < r + 1, as DIPlib's `RadialSum` bins them. The curve is a float64 array of length n // 2.
-- `two_frc(img1, img2)` computes the FRC curve of two square images of one size.
-- `ring_counts(n)` gives the number of frequencies in each ring of an n x n spectrum, as a uint64 array.
-- `FrcPlan(n)` holds the FFT plans and the buffers for n x n images. `one_frc` and `two_frc` make one per call; for several images of one size, make one plan and use its `one_frc` and `two_frc` methods.
+frc-core has wheels for Linux (x86_64, glibc 2.28 and later), macOS (Apple Silicon and Intel) and Windows (x86_64). One wheel per platform covers CPython 3.11 and later, and one covers free-threaded CPython 3.15t and later. On other platforms, pip builds frc-core from source, which needs a Rust toolchain.
 
-With a seed, the same input gives the same output on every CPU and any number of threads. Without one, every call draws a fresh seed from the operating system.
+## Usage
+
+Pass `one_frc` a square image of photon counts, after offset and gain correction and before any other processing:
 
 ```python
 import numpy as np
@@ -24,19 +22,25 @@ img = np.random.default_rng(0).poisson(100, (1024, 1024))
 curve = np.asarray(frc_core.one_frc(img, seed=1))
 ```
 
+- `one_frc(img, seed=None, tukey_alpha=0.125, rings="nearest")` splits every count of `img` binomially in two, multiplies both halves by a Tukey window with alpha `tukey_alpha`, and returns their FRC curve: a float64 value for each ring r < n // 2 of the n x n image. `tukey_alpha=0` applies no window.
+- `two_frc(img1, img2, rings="nearest")` returns the FRC curve of two square images of one size. It applies no window: multiply both images by one first.
+- `binom_split(a, seed=None)` returns an int32 array of the shape of `a` with a sample k of binomial(c, 0.5) for each count c. If c is Poisson-distributed with mean λ, then k and c - k are independent and Poisson-distributed with mean λ / 2.
+- `resolution(curve, n, threshold="1/7", rings="nearest")` returns the resolution of an n x n image in pixels, and the threshold at the crossing, or `None` if the curve does not drop below the threshold. It finds the first ring whose FRC is below the threshold and interpolates between that ring and the one before it. `threshold` is `"1/7"`, `"half_bit"` or a float.
+- `ring_counts(n, rings="nearest")` returns the number of frequencies in each ring of an n x n spectrum, as uint64 values.
+- `FrcPlan(n, rings="nearest")` holds the FFT plan and the working memory for n x n images. `one_frc` and `two_frc` make one on each call. For several images of one size, make one plan and call its `one_frc`, `two_frc` and `resolution` methods.
+
+With `rings="nearest"`, ring r holds the frequencies whose distance |f| from the origin rounds to r. With `rings="floor"`, it holds those with r <= |f| < r + 1, as frc 0.1 and 0.2 did.
+
+## Repeatable results
+
+Without a seed, every call draws a new seed from the operating system. With a seed:
+
+- `binom_split` returns the same samples for the same array on every CPU and any number of threads.
+- `one_frc` returns the same curve for the same image on any number of threads. Between CPUs with different vector instructions, the Fourier transform rounds differently, and a curve differs in its last bits.
+- `one_frc(img, seed=s, tukey_alpha=0)` is `two_frc(k, img - k)` with `k = binom_split(img, seed=s)`, for a square image.
+
 ## Performance
 
-On 8 threads of an AMD EPYC 9V45 (Zen 5, AVX-512), with mean counts of 100 to 200:
+`FrcPlan.one_frc` of a 4096 x 4096 int32 image takes about 15 ms, and `one_frc`, which also makes the plan, about 25 ms. This was measured on 2026-11-14 through Python, on 8 threads of an AMD EPYC 9V45. Counts that are not int32, and images for `two_frc` that are not float32, are converted first. For a 4096 x 4096 int64 image that adds about 11 ms.
 
-- `binom_split`: its sampler takes ~1 ms on a 2000x2000 array, against ~49 ms for rustfrc 1.2.
-- `FrcPlan.one_frc`: ~18 ms on a 4096x4096 image with a reused plan, ~30 ms with `one_frc`, which makes the plan, against ~1000 ms for `frc.one_frc` 0.2 (rustfrc 1.2's split with DIPlib's FFT and `RadialSum`).
-
-## Installation
-
-```shell
-pip install frc-core
-```
-
-In a project managed by [uv](https://github.com/astral-sh/uv), add it with `uv add frc-core`.
-
-To build a wheel from a checkout of the [repository](https://github.com/tiptenbrink/frc), run `uvx maturin build --release` in `python/frc-core`. This builds one wheel for CPython 3.11 and later; for free-threaded Python, build with a free-threaded interpreter, e.g. `uvx maturin build --release -i python3.15t`. The wheels land in `target/wheels` at the root of the repository.
+frc-core replaces rustfrc, whose last release is 1.2.0.

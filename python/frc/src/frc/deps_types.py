@@ -1,34 +1,30 @@
-"""Shared dependencies and types module for use by other modules. Only
-includes dependencies used in two or more related modules.
-"""
+"""The types that the functions of frc take and return."""
 
 # Copyright (C) 2021                Department of Imaging Physics
 # All rights reserved               Faculty of Applied Sciences
 #                                   TU Delft
 # Tip ten Brink
 
-import typing
-import numpy
+from collections.abc import Callable
 
-__all__ = ['Img', 'Func1D', 'NoIntersectionException']
+import numpy as np
 
-# Imports are redefined to prevent warnings that imports are unused
-np = numpy
+__all__ = ['Img', 'Func1D', 'NoIntersectionException', 'NotCountsWarning']
 
-Callable = typing.Callable
-Union = typing.Union
-Optional = typing.Optional
-List = typing.List
-Tuple = typing.Tuple
-
-# Images are NumPy arrays. Before 0.3, frc also took DIPlib images.
+# An image is a NumPy array. Before 0.3, frc also took DIPlib images.
 Img = np.ndarray
 
-# One-dimensional function that maps (an array of) floats to (an array of) floats
-Func1D = Callable[[Union[np.ndarray, float]], Union[np.ndarray, float]]
+# A function of one variable: it maps a float to a float, and an array of
+# floats to an array of floats.
+Func1D = Callable[[np.ndarray | float], np.ndarray | float]
 
 
 class NoIntersectionException(ValueError):
-    """ Intersection could not be found, input did not take correct values for
-    intersection calculation. """
-    pass
+    """The error of a curve that does not cross its threshold."""
+
+
+class NotCountsWarning(UserWarning):
+    """The warning of one_frc without a tukey_alpha for an image that holds
+    values that are not whole numbers, such as an image that was multiplied
+    by a window. To switch it off, ignore this class with the warnings
+    module."""

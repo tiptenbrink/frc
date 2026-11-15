@@ -1,107 +1,86 @@
-//! Exact binomial (n, 0.5) sampling: the number of ones in n random bits. Sixteen xoshiro256++
-//! generators run side by side, one pixel per lane, so that every step compiles to vector code,
-//! with AVX-512 when the CPU has it; the AVX2 path is written by hand. Every path gives the same
-//! samples.
+//! An exact binomial split: every count n becomes a sample of binomial (n, 0.5), the number of
+//! ones among n random bits.
 //!
-//! Every chunk of `CHUNK_LEN` counts gets its own generator, seeded from the call's seed and the
-//! chunk's index, so the samples depend on the seed alone and not on how rayon schedules the
-//! chunks.
+//! Sixteen xoshiro256++ generators run side by side, one count per lane, so that every step is
+//! vector code. On x86-64 the code is chosen at run time: for AVX-512, for AVX2, where it is
+//! written by hand, or for the baseline. Every choice draws the same samples.
+//!
+//! An image is split in chunks of whole rows. Every chunk has generators of its own, seeded from
+//! the call's seed and the chunk's index. The samples therefore depend on the seed and the
+//! length of a row alone, and not on how rayon schedules the chunks.
 
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use rand::SeedableRng;
-use rand_xoshiro::SplitMix64;
 use rayon::prelude::*;
 
-/// Number of counts that one generator samples, and so the unit of parallel work.
-pub const CHUNK_LEN: usize = 1 << 14;
+use crate::cpu::{CpuFeatures, InstructionSet};
 
-/// Number of xoshiro256++ streams that `XoshiroLanes` steps together. 16 lanes give 16
-/// independent dependency chains, which is what keeps the vector units busy; 8 lanes are slower.
-pub const LANES: usize = 16;
+/// Counts that a chunk of a split holds at most, unless one row holds more. A chunk is what one
+/// task samples, and what one task of the FRC's row pass transforms: 16 rows of a 4096 x 4096
+/// image, so that each such task writes 16 rows into every panel of the spectrum.
+const CHUNK_COUNTS: usize = 65536;
 
-/// A count that binomial (n, 0.5) is not defined for.
+/// Returns the number of rows of an image, each of `row_len` counts, that one chunk of a split
+/// holds.
+///
+/// # Panics
+///
+/// Panics if `row_len` is 0.
+pub(crate) fn rows_per_chunk(row_len: usize) -> usize {
+    (CHUNK_COUNTS / row_len).max(1)
+}
+
+/// xoshiro256++ generators that step together. 16 lanes give the CPU 16 independent chains of
+/// instructions to work on at once. With 8 lanes the split was slower.
+const LANES: usize = 16;
+
+/// The error of a split of counts of which one is negative.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NegativeCount;
 
 impl Display for NegativeCount {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("counts must not be negative")
+        f.write_str("count is negative")
     }
 }
 
 impl std::error::Error for NegativeCount {}
 
-fn chunk_seed(seed: u64, chunk_index: usize) -> u64 {
-    seed ^ (chunk_index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+/// Steps a SplitMix64 generator and returns its output. Its outputs seed the xoshiro256++
+/// generators, as the authors of xoshiro256++ recommend.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
-/// Which instructions the sampler may use beyond the x86-64 baseline that wheels are built for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CpuFeatures {
-    /// Only the baseline (SSE2), whatever the CPU has.
-    Baseline,
-    /// What the CPU reports at run time, up to AVX2 and `popcnt`: never AVX-512.
-    UpToAvx2,
-    /// Everything the CPU reports at run time that the sampler has a path for.
-    Detected,
+/// Returns the generators of chunk `index` of a split with `seed`.
+fn chunk_generator(seed: u64, index: usize) -> XoshiroLanes {
+    let mut chunk_seed = seed ^ (index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    XoshiroLanes::seed_from_u64(splitmix64(&mut chunk_seed))
 }
 
-/// The code that the sampler runs, as `CpuFeatures` and the CPU decide it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LanesPath {
-    Portable,
-    /// `avx2::sample_chunk`: rotates as two shifts and an or, popcount as a table lookup.
-    Avx2,
-    /// Native rotate (`vprolq`) and popcount (`vpopcntq`).
-    Avx512,
-}
-
-impl CpuFeatures {
-    /// The path the sampler takes on this CPU.
-    pub(crate) fn lanes_path(self) -> LanesPath {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let avx2 = self != Self::Baseline
-                && is_x86_feature_detected!("popcnt")
-                && is_x86_feature_detected!("avx2");
-            let avx512 = self == Self::Detected
-                && avx2
-                && is_x86_feature_detected!("avx512f")
-                && is_x86_feature_detected!("avx512vl")
-                && is_x86_feature_detected!("avx512vpopcntdq");
-            if avx512 {
-                return LanesPath::Avx512;
-            }
-            if avx2 {
-                return LanesPath::Avx2;
-            }
-        }
-        LanesPath::Portable
-    }
-}
-
-/// `L` xoshiro256++ generators stored lane by lane, so that one step of all of them compiles to
-/// vector instructions.
-#[derive(Clone)]
-pub struct XoshiroLanes<const L: usize = LANES> {
+/// `L` xoshiro256++ generators. Each of the four words of their state is stored for all lanes
+/// together, so that one step of all generators is vector code.
+struct XoshiroLanes<const L: usize = LANES> {
     s: [[u64; L]; 4],
 }
 
 impl<const L: usize> XoshiroLanes<L> {
-    pub fn seed_from_u64(seed: u64) -> Self {
-        let mut sm = SplitMix64::seed_from_u64(seed);
+    fn seed_from_u64(seed: u64) -> Self {
+        let mut state = seed;
         let mut s = [[0; L]; 4];
         for word in s.iter_mut().flatten() {
-            *word = rand::Rng::next_u64(&mut sm);
+            *word = splitmix64(&mut state);
         }
         Self { s }
     }
 
-    /// Steps every lane once and writes their outputs to `out`.
+    /// Steps every lane once and writes the lanes' outputs to `out`.
     #[inline(always)]
-    pub fn next_block(&mut self, out: &mut [u64; L]) {
+    fn next_block(&mut self, out: &mut [u64; L]) {
         let [s0, s1, s2, s3] = &mut self.s;
         for i in 0..L {
             out[i] = s0[i]
@@ -119,87 +98,82 @@ impl<const L: usize> XoshiroLanes<L> {
     }
 }
 
-/// Exact binomial (n, 0.5) for `L` counts at once, one per lane: lane i takes the bits of count
-/// i from generator lane i, 64 at a time, until the largest count of the group is covered. Every
-/// step is the same for all lanes, so it compiles to vector code: the mask is a variable shift
-/// (`vpsllvq`) and the popcount a table lookup on AVX2, which has no 64-bit popcount.
+/// Replaces the counts of each group, which must not be negative, with samples of binomial
+/// (n, 0.5). Lane i takes the bits of count i from generator lane i, 64 at a time, until the
+/// largest count of the group is covered. Every step is the same for all lanes, so it compiles to
+/// vector code.
+///
+/// It is inlined into a function of its own for each set of CPU features. A closure between the
+/// two would be compiled for the baseline alone.
 #[inline(always)]
-fn binomial_lanes<const L: usize>(rng: &mut XoshiroLanes<L>, n: &[u32; L]) -> [u32; L] {
-    let max = n.iter().copied().max().unwrap_or(0);
-    let mut k = [0u64; L];
-    let mut words = [0u64; L];
-    let mut covered = 0u32;
-    while covered < max {
-        rng.next_block(&mut words);
-        for i in 0..L {
-            let left = n[i].saturating_sub(covered);
-            let mask = if left >= 64 {
-                u64::MAX
-            } else {
-                (1u64 << left) - 1
-            };
-            k[i] += (words[i] & mask).count_ones() as u64;
+fn sample_groups_portable(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+    for group in groups {
+        let largest = group.iter().copied().max().unwrap_or(0) as u32;
+        let mut ones = [0u64; LANES];
+        let mut words = [0u64; LANES];
+        let mut covered = 0u32;
+        while covered < largest {
+            rng.next_block(&mut words);
+            for i in 0..LANES {
+                let left = (group[i] as u32).saturating_sub(covered);
+                let mask = if left >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << left) - 1
+                };
+                ones[i] += (words[i] & mask).count_ones() as u64;
+            }
+            covered += 64;
         }
-        covered += 64;
-    }
-    k.map(|k| k as u32)
-}
-
-/// Replaces every count of `chunk`, which must not be negative, with the sample that `group`
-/// draws for it, `LANES` counts at a time; the last group is padded with zeros.
-#[inline(always)]
-fn sample_groups(chunk: &mut [i32], mut group: impl FnMut(&[u32; LANES]) -> [u32; LANES]) {
-    let (groups, tail) = chunk.as_chunks_mut::<LANES>();
-    for g in groups {
-        *g = group(&g.map(|x| x as u32)).map(|k| k as i32);
-    }
-    if !tail.is_empty() {
-        let mut n = [0; LANES];
-        for (n, x) in n.iter_mut().zip(tail.iter()) {
-            *n = *x as u32;
-        }
-        let k = group(&n);
-        for (x, k) in tail.iter_mut().zip(k) {
-            *x = k as i32;
-        }
+        *group = ones.map(|k| k as i32);
     }
 }
 
-#[inline(always)]
-fn sample_chunk_portable(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-    sample_groups(chunk, |n| binomial_lanes(rng, n))
-}
-
-/// `sample_chunk_portable` compiled for AVX-512, where `rotate_left` becomes `vprolq` and
+/// `sample_groups_portable` compiled for AVX-512, where `rotate_left` becomes `vprolq` and
 /// `count_ones` becomes `vpopcntq` (AVX512_VPOPCNTDQ: Ice Lake and later, Zen 4 and later).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512vpopcntdq,avx2,popcnt")]
-fn sample_chunk_avx512(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-    sample_chunk_portable(rng, chunk)
+fn sample_groups_avx512(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+    sample_groups_portable(rng, groups)
 }
 
-/// Samples `chunk` with the code of `path`. Calling code compiled for CPU features that the
-/// caller does not have is unsafe, and this is the only unsafe code outside `platform`.
+/// Replaces the counts of each group with samples, with the code for `set`. A call of code
+/// compiled for CPU features is unsafe from code compiled without them, and this function holds
+/// the crate's only unsafe code outside `platform`.
 #[allow(unsafe_code)]
-fn sample_chunk(path: LanesPath, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-    match path {
-        LanesPath::Portable => sample_chunk_portable(rng, chunk),
-        // SAFETY: `CpuFeatures::lanes_path` gives a path only if the CPU has its features.
+fn sample_groups(set: InstructionSet, rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
+    match set {
+        InstructionSet::Baseline => sample_groups_portable(rng, groups),
+        // SAFETY: `CpuFeatures::instruction_set` gives a set only if the CPU has it.
         #[cfg(target_arch = "x86_64")]
-        LanesPath::Avx2 => unsafe { avx2::sample_chunk(rng, chunk) },
+        InstructionSet::Avx2 => unsafe { avx2::sample_groups(rng, groups) },
         #[cfg(target_arch = "x86_64")]
-        LanesPath::Avx512 => unsafe { sample_chunk_avx512(rng, chunk) },
-        #[cfg(not(target_arch = "x86_64"))]
-        _ => unreachable!("only x86-64 has vector paths"),
+        InstructionSet::Avx512 => unsafe { sample_groups_avx512(rng, groups) },
     }
 }
 
-/// `sample_chunk_portable` by hand for AVX2, which LLVM compiles poorly from the portable code:
+/// Replaces every count of `chunk`, which must not be negative, with a sample of binomial
+/// (n, 0.5), `LANES` counts at a time. The last group is padded with zeros.
+fn sample_chunk(set: InstructionSet, rng: &mut XoshiroLanes, chunk: &mut [i32]) {
+    let (groups, tail) = chunk.as_chunks_mut::<LANES>();
+    sample_groups(set, rng, groups);
+    if !tail.is_empty() {
+        let mut group = [0; LANES];
+        group[..tail.len()].copy_from_slice(tail);
+        sample_groups(set, rng, std::slice::from_mut(&mut group));
+        tail.copy_from_slice(&group[..tail.len()]);
+    }
+}
+
+/// `sample_groups_portable` by hand for AVX2. LLVM compiles the portable code poorly for AVX2:
 /// the state of 16 lanes fills all 16 vector registers, so it spills on every step, and each
 /// word's popcount ends in its own `vpsadbw` and repacking. Here half the lanes at a time go
-/// through a block of groups with their state in registers. On a Ryzen 5 3400G (Zen+), which
-/// splits every 256-bit instruction in two and shifts on one unit, the split takes two thirds of
-/// the time it took with the portable code; on an Intel Core Ultra it takes as long.
+/// through a block of groups, so that their state takes 8 of the registers.
+///
+/// On a Ryzen 5 3400G (Zen+), which splits every 256-bit instruction in two and shifts on one
+/// unit, the split takes two thirds of the time it took with the portable code. On an Intel Core
+/// Ultra it takes as long. Four lanes at a time, with no state spilled, were no faster on a Core
+/// Ultra 7 155H: the three ports that take its vector instructions limit the sampler there.
 #[cfg(target_arch = "x86_64")]
 mod avx2 {
     use std::arch::x86_64::*;
@@ -217,31 +191,19 @@ mod avx2 {
     /// Popcounts of words (at most 8 per byte each) that a byte can add up before `vpsadbw`.
     const BYTE_SUM_WORDS: u32 = 31;
 
+    /// Replaces the counts of each group with samples, as `super::sample_groups_portable` does:
+    /// lane i of a group takes words from generator lane i until the group's largest count is
+    /// covered.
     #[target_feature(enable = "avx2")]
-    pub(super) fn sample_chunk(rng: &mut XoshiroLanes, chunk: &mut [i32]) {
-        let (groups, tail) = chunk.as_chunks_mut::<LANES>();
+    pub(super) fn sample_groups(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
         for block in groups.chunks_mut(BLOCK_GROUPS) {
-            sample_groups(rng, block);
-        }
-        if !tail.is_empty() {
-            let mut group = [0; LANES];
-            group[..tail.len()].copy_from_slice(tail);
-            sample_groups(rng, std::slice::from_mut(&mut group));
-            tail.copy_from_slice(&group[..tail.len()]);
-        }
-    }
-
-    /// Replaces the counts of up to `BLOCK_GROUPS` groups with samples, as `super::binomial_lanes`
-    /// does: lane i of a group takes words from generator lane i until the group's largest count
-    /// is covered.
-    #[target_feature(enable = "avx2")]
-    fn sample_groups(rng: &mut XoshiroLanes, groups: &mut [[i32; LANES]]) {
-        let mut words = [0; BLOCK_GROUPS];
-        for (words, group) in words.iter_mut().zip(groups.iter()) {
-            *words = (group.iter().copied().max().unwrap_or(0) as u32).div_ceil(64);
-        }
-        for first in (0..LANES).step_by(HALF) {
-            sample_half(rng, groups, &words, first);
+            let mut words = [0; BLOCK_GROUPS];
+            for (words, group) in words.iter_mut().zip(block.iter()) {
+                *words = (group.iter().copied().max().unwrap_or(0) as u32).div_ceil(64);
+            }
+            for first in (0..LANES).step_by(HALF) {
+                sample_half(rng, block, &words, first);
+            }
         }
     }
 
@@ -351,76 +313,97 @@ mod avx2 {
     }
 }
 
-/// The generator of chunk `index` for `seed`.
-fn chunk_generator(seed: u64, index: usize) -> XoshiroLanes {
-    let mut sm = SplitMix64::seed_from_u64(chunk_seed(seed, index));
-    XoshiroLanes::seed_from_u64(rand::Rng::next_u64(&mut sm))
-}
-
-/// Replaces every count n of `counts` with a sample of binomial (n, 0.5), in parallel, using the
-/// path that `cpu` and the CPU allow. Fails, and leaves the chunks with a negative count as they
-/// are, if a count is negative.
-pub fn binom_split(counts: &mut [i32], seed: u64, cpu: CpuFeatures) -> Result<(), NegativeCount> {
-    let path = cpu.lanes_path();
-    let negative = AtomicBool::new(false);
+/// Replaces every count c of an image with a sample of binomial(c, 1/2), in parallel.
+///
+/// `counts` holds the image in row-major order, in rows of `row_len` counts. The sample of a
+/// count is the number of ones among c random bits.
+///
+/// The same counts, row length and seed give the same samples on every CPU, whatever `cpu`
+/// allows, and on any number of threads. For a square image they are the samples that
+/// [`FrcPlan::one_frc`](crate::FrcPlan::one_frc) draws with the same seed.
+///
+/// # Errors
+///
+/// Returns [`NegativeCount`] if a count is negative. Some counts are then replaced and others
+/// are not.
+///
+/// # Panics
+///
+/// Panics if `row_len` is 0.
+pub fn binom_split(
+    counts: &mut [i32],
+    row_len: usize,
+    seed: u64,
+    cpu: CpuFeatures,
+) -> Result<(), NegativeCount> {
+    let set = cpu.instruction_set();
     counts
-        .par_chunks_mut(CHUNK_LEN)
+        .par_chunks_mut(rows_per_chunk(row_len) * row_len)
         .enumerate()
-        .for_each(|(i, chunk)| {
+        .try_for_each(|(index, chunk)| {
             if chunk.iter().any(|&n| n < 0) {
-                negative.store(true, Ordering::Relaxed);
-                return;
+                return Err(NegativeCount);
             }
-            sample_chunk(path, &mut chunk_generator(seed, i), chunk);
-        });
-    if negative.into_inner() {
-        Err(NegativeCount)
-    } else {
-        Ok(())
-    }
+            sample_chunk(set, &mut chunk_generator(seed, index), chunk);
+            Ok(())
+        })
 }
 
-/// Counts that `Splitter::split_chunk` samples at a time, on the stack.
+/// Counts that [`Splitter::split_chunk`] samples at a time, in a buffer on the stack.
 const SPLIT_BLOCK: usize = 4096;
 
-/// `binom_split` driven one chunk at a time by the caller, so that the split can be fused with
-/// other work on the same memory, such as an FFT of each row while it is in cache. Chunk `index`
-/// gets the generator of chunk `index` of `binom_split`, so with chunks of `CHUNK_LEN` counts
-/// both give the same samples.
-pub struct Splitter {
+/// [`binom_split`] one chunk at a time, for a caller that does other work on a chunk while its
+/// memory is in the cache, such as the FFT of its rows. Chunk `index` gets the generators that
+/// `binom_split` gives its chunk `index`, so with chunks of [`rows_per_chunk`] rows both draw
+/// the same samples.
+pub(crate) struct Splitter {
     seed: u64,
-    path: LanesPath,
+    set: InstructionSet,
 }
 
 impl Splitter {
-    pub fn new(seed: u64, cpu: CpuFeatures) -> Self {
+    pub(crate) fn new(seed: u64, cpu: CpuFeatures) -> Self {
         Self {
             seed,
-            path: cpu.lanes_path(),
+            set: cpu.instruction_set(),
         }
     }
 
-    /// Samples k ~ binomial (n, 0.5) for every count n of `counts`, chunk `index` of the image,
-    /// and writes `f(n, k)` to the same place in `out`; `counts` stays as it is.
-    pub fn split_chunk<T>(
+    /// Draws a sample k of binomial (n, 0.5) for every count n of `counts`, which is chunk
+    /// `index` of an image, and writes `value_of(n, k)` to the same position in `out`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NegativeCount`] if a count is negative.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `counts` and `out` differ in length.
+    pub(crate) fn split_chunk<T>(
         &self,
         index: usize,
         counts: &[i32],
         out: &mut [T],
-        f: impl Fn(i32, i32) -> T,
+        value_of: impl Fn(i32, i32) -> T,
     ) -> Result<(), NegativeCount> {
-        assert_eq!(counts.len(), out.len());
+        assert_eq!(
+            counts.len(),
+            out.len(),
+            "counts holds {} values and out {}",
+            counts.len(),
+            out.len()
+        );
         if counts.iter().any(|&n| n < 0) {
             return Err(NegativeCount);
         }
         let mut rng = chunk_generator(self.seed, index);
-        let mut k = [0i32; SPLIT_BLOCK];
-        for (c, o) in counts.chunks(SPLIT_BLOCK).zip(out.chunks_mut(SPLIT_BLOCK)) {
-            let k = &mut k[..c.len()];
-            k.copy_from_slice(c);
-            sample_chunk(self.path, &mut rng, k);
-            for ((o, &n), &k) in o.iter_mut().zip(c).zip(k.iter()) {
-                *o = f(n, k);
+        let mut samples = [0i32; SPLIT_BLOCK];
+        for (counts, out) in counts.chunks(SPLIT_BLOCK).zip(out.chunks_mut(SPLIT_BLOCK)) {
+            let samples = &mut samples[..counts.len()];
+            samples.copy_from_slice(counts);
+            sample_chunk(self.set, &mut rng, samples);
+            for ((out, &n), &k) in out.iter_mut().zip(counts).zip(samples.iter()) {
+                *out = value_of(n, k);
             }
         }
         Ok(())
@@ -430,8 +413,8 @@ impl Splitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
-    use rand_xoshiro::Xoshiro256PlusPlus;
+    use rand::{Rng, SeedableRng};
+    use rand_xoshiro::{SplitMix64, Xoshiro256PlusPlus};
 
     fn ln_choose(n: u64, k: u64) -> f64 {
         (0..k).map(|i| ((n - i) as f64 / (i + 1) as f64).ln()).sum()
@@ -479,7 +462,7 @@ mod tests {
                 0u64, 1, 2, 7, 63, 64, 65, 127, 200, 1000, 1024, 1025, 5000, 40_000,
             ] {
                 let mut a = vec![n as i32; 100_000];
-                binom_split(&mut a, 0xF00D ^ n, cpu).unwrap();
+                binom_split(&mut a, 1, 0xF00D ^ n, cpu).unwrap();
                 assert_binomial_half(&format!("{cpu:?}"), n, &a);
             }
         }
@@ -493,7 +476,7 @@ mod tests {
             for n in [1, 7, 20, 63, 64, 65, 100] {
                 let len = 400_000;
                 let mut a = vec![n; len];
-                binom_split(&mut a, 0xC0FFEE ^ n as u64, cpu).unwrap();
+                binom_split(&mut a, 1, 0xC0FFEE ^ n as u64, cpu).unwrap();
                 let mean = n as f64 / 2.0;
                 let variance = n as f64 / 4.0;
                 for offset in [1, LANES] {
@@ -517,21 +500,21 @@ mod tests {
 
     #[test]
     fn negative_counts_are_refused() {
-        let mut a = vec![5; 3 * CHUNK_LEN];
-        a[CHUNK_LEN + 7] = -1;
+        let mut a = vec![5; 3 * CHUNK_COUNTS];
+        a[CHUNK_COUNTS + 7] = -1;
         assert_eq!(
-            binom_split(&mut a, 1, CpuFeatures::Detected),
+            binom_split(&mut a, 1, 1, CpuFeatures::Detected),
             Err(NegativeCount)
         );
     }
 
     #[test]
     fn samples_depend_only_on_the_seed() {
-        let input: Vec<i32> = (0..5 * CHUNK_LEN as i32).map(|i| i % 300).collect();
+        let input: Vec<i32> = (0..5 * CHUNK_COUNTS as i32).map(|i| i % 300).collect();
         let (mut a, mut b, mut c) = (input.clone(), input.clone(), input);
-        binom_split(&mut a, 42, CpuFeatures::Detected).unwrap();
-        binom_split(&mut b, 42, CpuFeatures::Detected).unwrap();
-        binom_split(&mut c, 43, CpuFeatures::Detected).unwrap();
+        binom_split(&mut a, 1, 42, CpuFeatures::Detected).unwrap();
+        binom_split(&mut b, 1, 42, CpuFeatures::Detected).unwrap();
+        binom_split(&mut c, 1, 43, CpuFeatures::Detected).unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
@@ -539,7 +522,7 @@ mod tests {
     #[test]
     fn every_path_gives_the_same_samples() {
         // Counts of up to 40 000 need 625 words, so the AVX2 path adds its byte sums many times.
-        let input: Vec<i32> = (0..3 * CHUNK_LEN as i32)
+        let input: Vec<i32> = (0..3 * CHUNK_COUNTS as i32)
             .map(|i| {
                 if i % 997 == 0 {
                     40_000 - i % 300
@@ -552,7 +535,7 @@ mod tests {
             .iter()
             .map(|&cpu| {
                 let mut a = input.clone();
-                binom_split(&mut a, 7, cpu).unwrap();
+                binom_split(&mut a, 1, 7, cpu).unwrap();
                 a
             })
             .collect();
@@ -562,14 +545,17 @@ mod tests {
 
     #[test]
     fn splitter_matches_binom_split() {
-        let counts: Vec<i32> = (0..5 * CHUNK_LEN as i32 + 77).map(|i| i % 700).collect();
+        // Rows of 1000 counts: chunks of 65 rows, and a last chunk of 77 counts.
+        let row_len = 1000;
+        let chunk_len = rows_per_chunk(row_len) * row_len;
+        let counts: Vec<i32> = (0..5 * chunk_len as i32 + 77).map(|i| i % 700).collect();
         let mut a = counts.clone();
-        binom_split(&mut a, 9, CpuFeatures::Detected).unwrap();
+        binom_split(&mut a, row_len, 9, CpuFeatures::Detected).unwrap();
         let splitter = Splitter::new(9, CpuFeatures::Detected);
         let mut b = vec![(0, 0); counts.len()];
         for (i, (c, o)) in counts
-            .chunks(CHUNK_LEN)
-            .zip(b.chunks_mut(CHUNK_LEN))
+            .chunks(chunk_len)
+            .zip(b.chunks_mut(chunk_len))
             .enumerate()
         {
             splitter.split_chunk(i, c, o, |n, k| (n, k)).unwrap();
@@ -587,6 +573,15 @@ mod tests {
                 .split_chunk(0, &negative, &mut b[..100], |n, k| (n, k))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn splitmix64_is_rand_xoshiros() {
+        let mut state = 0x1234_5678_9ABC_DEF0;
+        let mut reference = SplitMix64::seed_from_u64(state);
+        for _ in 0..10 {
+            assert_eq!(splitmix64(&mut state), reference.next_u64());
+        }
     }
 
     /// Each lane is a plain xoshiro256++ generator.

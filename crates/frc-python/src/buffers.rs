@@ -1,6 +1,7 @@
-//! Arrays in and out of Python without NumPy: inputs through the buffer protocol, which NumPy
-//! arrays, `array.array`, `memoryview` and most other array types export, and outputs as a
-//! `memoryview` over a new `bytearray`, which `numpy.asarray` wraps without a copy.
+//! Arrays in and out of Python without NumPy. Inputs come through the buffer protocol, which
+//! NumPy arrays, `array.array`, `memoryview` and most other array types export. Outputs are a
+//! `memoryview` over a new array of this module's own, which `numpy.asarray` wraps without a
+//! copy.
 
 use std::borrow::Cow;
 use std::ffi::CStr;
@@ -8,10 +9,10 @@ use std::ffi::CStr;
 use pyo3::buffer::PyUntypedBuffer;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyByteArray, PyMemoryView, PyTuple};
+use pyo3::types::PyMemoryView;
 use rayon::prelude::*;
 
-use crate::buffer_memory::buffer_memory;
+use crate::buffer_memory::{OutputArray, buffer_memory, zeroed_words};
 
 /// The type of a buffer's elements, from its struct-module format and item size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,12 +67,11 @@ impl Element {
         })
     }
 
-    fn is_float(self) -> bool {
-        matches!(self, Self::F32 | Self::F64)
-    }
-
-    /// The element in `bytes`, which are one element of this type, as an integer, for an
-    /// integer or bool element type.
+    /// Reads `bytes`, which hold one element of this type, as an integer.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a float type.
     fn read_integer(self, bytes: &[u8]) -> i128 {
         use bytemuck::pod_read_unaligned as read;
         match self {
@@ -87,15 +87,6 @@ impl Element {
             Self::F32 | Self::F64 => unreachable!("not an integer type"),
         }
     }
-
-    /// The element in `bytes`, which are one element of this type, as an f32.
-    fn read_f32(self, bytes: &[u8]) -> f32 {
-        match self {
-            Self::F32 => bytemuck::pod_read_unaligned::<f32>(bytes),
-            Self::F64 => bytemuck::pod_read_unaligned::<f64>(bytes) as f32,
-            _ => self.read_integer(bytes) as f32,
-        }
-    }
 }
 
 /// An array that a function reads, held through the buffer protocol until it is dropped.
@@ -108,6 +99,14 @@ pub struct InputBuffer {
 
 /// The largest count that the split takes: counts are i32 inside.
 const MAX_COUNT: i128 = i32::MAX as i128;
+
+/// Elements that one task of a conversion takes.
+const CONVERT_CHUNK: usize = 1 << 14;
+
+/// Returns `element` as a count, or -1 if it is negative or above `MAX_COUNT`.
+fn count_of<S: TryInto<i32>>(element: S) -> i32 {
+    element.try_into().unwrap_or(-1)
+}
 
 impl InputBuffer {
     pub fn get(obj: &Bound<'_, PyAny>, name: &'static str) -> PyResult<Self> {
@@ -193,130 +192,172 @@ impl InputBuffer {
         }
     }
 
-    /// Converts every element with `convert`, which gets its bytes, into `out`, which has one
-    /// place per element, in row-major order: in parallel for a contiguous buffer.
-    fn convert_into<T: Send>(
+    /// Writes every element to `out`, which has one place per element, in row-major order:
+    /// read as an `S`, the type of the buffer's elements, and converted by `convert`. A
+    /// contiguous buffer is converted in parallel.
+    fn convert_into<S: bytemuck::Pod, T: Send>(
         &self,
         out: &mut [T],
-        convert: impl Fn(&[u8]) -> PyResult<T> + Sync,
-    ) -> PyResult<()> {
-        let size = self.buffer.item_size();
+        convert: impl Fn(S) -> T + Sync,
+    ) {
+        let size = size_of::<S>();
+        assert_eq!(size, self.buffer.item_size(), "elements are not of type S");
         let (memory, first) = buffer_memory(&self.buffer);
+        let converted = |bytes: &[u8]| convert(bytemuck::pod_read_unaligned(bytes));
         if self.buffer.is_c_contiguous() {
-            return out
-                .par_iter_mut()
-                .zip(memory.par_chunks_exact(size))
-                .try_for_each(|(o, bytes)| {
-                    *o = convert(bytes)?;
-                    Ok(())
+            out.par_chunks_mut(CONVERT_CHUNK)
+                .zip(memory.par_chunks(CONVERT_CHUNK * size))
+                .for_each(|(out, bytes)| {
+                    for (out, bytes) in out.iter_mut().zip(bytes.chunks_exact(size)) {
+                        *out = converted(bytes);
+                    }
                 });
+            return;
         }
         let mut out = out.iter_mut();
-        let mut result = Ok(());
         self.for_each_offset(first, |at| {
-            if result.is_ok() {
-                match convert(&memory[at..at + size]) {
-                    Ok(v) => *out.next().expect("one place per element") = v,
-                    Err(e) => result = Err(e),
-                }
-            }
+            *out.next().expect("one place per element") = converted(&memory[at..at + size]);
         });
-        result
     }
 
-    /// The elements as counts for a binomial split, in row-major order: borrowed if the buffer
-    /// already holds contiguous int32s. Fails for floats, negative counts and counts above
-    /// 2**31 - 1.
-    pub fn counts(&self) -> PyResult<Cow<'_, [i32]>> {
-        if self.element.is_float() {
-            return Err(PyTypeError::new_err(format!(
-                "{} must hold integer counts, not floats; round or cast them first",
-                self.name
-            )));
+    /// Writes the elements to `out` as counts for a binomial split, in row-major order. An
+    /// element that is not a count, because it is negative or above 2**31 - 1, becomes -1.
+    /// The split refuses that, and [`InputBuffer::invalid_count_error`] then says which
+    /// element it was.
+    ///
+    /// Fails for floats.
+    pub fn write_counts(&self, out: &mut [i32]) -> PyResult<()> {
+        match self.element {
+            Element::Bool => self.convert_into(out, |byte: u8| (byte != 0) as i32),
+            Element::I8 => self.convert_into(out, count_of::<i8>),
+            Element::U8 => self.convert_into(out, count_of::<u8>),
+            Element::I16 => self.convert_into(out, count_of::<i16>),
+            Element::U16 => self.convert_into(out, count_of::<u16>),
+            Element::I32 => self.convert_into(out, count_of::<i32>),
+            Element::U32 => self.convert_into(out, count_of::<u32>),
+            Element::I64 => self.convert_into(out, count_of::<i64>),
+            Element::U64 => self.convert_into(out, count_of::<u64>),
+            Element::F32 | Element::F64 => {
+                return Err(PyTypeError::new_err(format!(
+                    "{} must hold integer counts, not floats; round or cast them first",
+                    self.name
+                )));
+            }
         }
-        let check = |n: i128| -> PyResult<i32> {
-            if n < 0 {
-                Err(PyValueError::new_err(format!(
-                    "{} holds a negative count: {n}",
-                    self.name
-                )))
-            } else if n > MAX_COUNT {
-                Err(PyValueError::new_err(format!(
-                    "{} holds a count above {MAX_COUNT}: {n}",
-                    self.name
-                )))
-            } else {
-                Ok(n as i32)
-            }
-        };
+        Ok(())
+    }
+
+    /// Returns the elements as counts for a binomial split, in row-major order, as
+    /// [`InputBuffer::write_counts`] writes them. Borrows them if the buffer already holds
+    /// contiguous int32s.
+    ///
+    /// Fails for floats.
+    pub fn counts(&self) -> PyResult<Cow<'_, [i32]>> {
         if let Some(counts) = self.as_slice::<i32>(Element::I32) {
-            if let Some(&n) = counts.iter().find(|&&n| n < 0) {
-                return Err(check(n as i128).unwrap_err());
-            }
             return Ok(Cow::Borrowed(counts));
         }
-        let element = self.element;
-        let mut out = vec![0i32; self.buffer.item_count()];
-        self.convert_into(&mut out, |bytes| check(element.read_integer(bytes)))?;
-        Ok(Cow::Owned(out))
+        let mut counts = vec![0i32; self.buffer.item_count()];
+        self.write_counts(&mut counts)?;
+        Ok(Cow::Owned(counts))
     }
 
-    /// The elements as float32s, in row-major order: borrowed if the buffer already holds
-    /// contiguous float32s.
-    pub fn floats(&self) -> PyResult<Cow<'_, [f32]>> {
-        if let Some(values) = self.as_slice::<f32>(Element::F32) {
-            return Ok(Cow::Borrowed(values));
+    /// Returns the error of a split that refused this buffer's counts. It names the first
+    /// element that is negative or above 2**31 - 1.
+    pub fn invalid_count_error(&self) -> PyErr {
+        let size = self.buffer.item_size();
+        let (memory, first) = buffer_memory(&self.buffer);
+        let mut invalid = None;
+        self.for_each_offset(first, |at| {
+            let n = self.element.read_integer(&memory[at..at + size]);
+            if invalid.is_none() && !(0..=MAX_COUNT).contains(&n) {
+                invalid = Some(n);
+            }
+        });
+        let name = self.name;
+        PyValueError::new_err(match invalid {
+            Some(n) if n < 0 => format!("{name} holds a negative count: {n}"),
+            Some(n) => format!("{name} holds a count above {MAX_COUNT}: {n}"),
+            None => format!("{name} holds a negative count"),
+        })
+    }
+
+    /// Returns the values of a curve: the elements of a 1D buffer of floats, as float64s.
+    pub fn curve(&self) -> PyResult<Vec<f64>> {
+        if self.shape().len() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "{} must be a 1D curve, not of shape {:?}",
+                self.name,
+                self.shape()
+            )));
         }
-        let element = self.element;
+        let mut out = vec![0f64; self.buffer.item_count()];
+        match self.element {
+            Element::F64 => self.convert_into(&mut out, |v: f64| v),
+            Element::F32 => self.convert_into(&mut out, |v: f32| v as f64),
+            _ => {
+                return Err(PyTypeError::new_err(format!(
+                    "{} must hold floats, as one_frc and two_frc return them",
+                    self.name
+                )));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Returns the elements as float32s, in row-major order. Borrows them if the buffer already
+    /// holds contiguous float32s.
+    pub fn floats(&self) -> Cow<'_, [f32]> {
+        if let Some(values) = self.as_slice::<f32>(Element::F32) {
+            return Cow::Borrowed(values);
+        }
         let mut out = vec![0f32; self.buffer.item_count()];
-        self.convert_into(&mut out, |bytes| Ok(element.read_f32(bytes)))?;
-        Ok(Cow::Owned(out))
+        let out_ref = &mut out[..];
+        match self.element {
+            Element::Bool => self.convert_into(out_ref, |byte: u8| (byte != 0) as u8 as f32),
+            Element::I8 => self.convert_into(out_ref, |v: i8| v as f32),
+            Element::U8 => self.convert_into(out_ref, |v: u8| v as f32),
+            Element::I16 => self.convert_into(out_ref, |v: i16| v as f32),
+            Element::U16 => self.convert_into(out_ref, |v: u16| v as f32),
+            Element::I32 => self.convert_into(out_ref, |v: i32| v as f32),
+            Element::U32 => self.convert_into(out_ref, |v: u32| v as f32),
+            Element::I64 => self.convert_into(out_ref, |v: i64| v as f32),
+            Element::U64 => self.convert_into(out_ref, |v: u64| v as f32),
+            Element::F32 => self.convert_into(out_ref, |v: f32| v),
+            Element::F64 => self.convert_into(out_ref, |v: f64| v as f32),
+        }
+        Cow::Owned(out)
     }
 }
 
 /// The struct-module format of an output element type.
-pub trait OutputElement: bytemuck::Pod + Default + Send {
-    const FORMAT: &'static str;
+pub trait OutputElement: bytemuck::Pod + Send + Sync {
+    const FORMAT: &'static CStr;
 }
 
 impl OutputElement for i32 {
-    const FORMAT: &'static str = "i";
+    const FORMAT: &'static CStr = c"i";
 }
 
 impl OutputElement for f64 {
-    const FORMAT: &'static str = "d";
+    const FORMAT: &'static CStr = c"d";
 }
 
 impl OutputElement for u64 {
-    const FORMAT: &'static str = "Q";
+    const FORMAT: &'static CStr = c"Q";
 }
 
-/// A new array of zero Ts in a `bytearray`, that `fill` fills while the GIL is released,
-/// returned as a `memoryview` of `shape`. `memoryview.cast` takes no zero in a shape, so an
-/// array with no elements comes back as a 1D `memoryview` of length 0.
+/// A new array of zero Ts, that `fill` fills while the GIL is released, returned as a
+/// `memoryview` of `shape`.
 pub fn new_memoryview<'py, T: OutputElement>(
     py: Python<'py>,
     shape: &[usize],
     fill: impl FnOnce(&mut [T]) -> PyResult<()> + Send,
 ) -> PyResult<Bound<'py, PyAny>> {
     let len: usize = shape.iter().product();
-    let bytes =
-        PyByteArray::new_with(
-            py,
-            len * size_of::<T>(),
-            |raw| match bytemuck::try_cast_slice_mut::<u8, T>(raw) {
-                Ok(values) => py.detach(|| fill(values)),
-                Err(_) => {
-                    let mut values = vec![T::default(); len];
-                    py.detach(|| fill(&mut values))?;
-                    raw.copy_from_slice(bytemuck::cast_slice(&values));
-                    Ok(())
-                }
-            },
-        )?;
-    let view = PyMemoryView::from(&bytes)?;
-    if len == 0 {
-        return view.call_method1("cast", (T::FORMAT,));
-    }
-    view.call_method1("cast", (T::FORMAT, PyTuple::new(py, shape)?))
+    // Words of 8 bytes are aligned for every T, and their bytes hold whole Ts.
+    let mut words = zeroed_words((len * size_of::<T>()).div_ceil(size_of::<u64>()));
+    let values = &mut bytemuck::cast_slice_mut::<u64, T>(&mut words)[..len];
+    py.detach(|| fill(values))?;
+    let array = OutputArray::new(words, T::FORMAT, size_of::<T>(), shape);
+    Ok(PyMemoryView::from(Bound::new(py, array)?.as_any())?.into_any())
 }

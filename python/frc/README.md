@@ -1,89 +1,49 @@
 # frc
 
-`frc` is a Python library for calculating Fourier Ring Correlation (FRC) curves and their associated resolution.
+frc computes Fourier ring correlation (FRC) curves of microscopy images and the resolution that follows from them. It works from two images of the same object, or from one image of photon counts (1FRC). The [repository's README](https://github.com/tiptenbrink/frc#readme) explains the method, when 1FRC applies, and which papers to cite.
 
-This is particularly useful for determining the resolution of images taken with super-resolution microscopy techniques.
+## Installation
 
-Its most computationally intensive functions are implemented in Rust, in [frc-core](https://pypi.org/project/frc-core/), which is released with frc from the same repository: the binomial split and the FRC itself, with its Fourier transforms and ring sums. `one_frc` on a 4096x4096 image takes about 30 ms on 8 threads of an AMD EPYC 9V45, instead of about 1 s in frc 0.2. The same code is also a Rust crate, [`frc`](https://crates.io/crates/frc).
+In a project managed by [uv](https://docs.astral.sh/uv/), run `uv add frc`. Otherwise run `pip install frc`, also in a conda environment.
 
-### Fourier Ring Correlation
+frc needs Python 3.11 or later. It depends on NumPy and on [frc-core](https://pypi.org/project/frc-core/), its compiled core, of the same version.
 
-Introduced in 1982, Fourier Ring Correlation compares two 2D images, which are assumed to be noise-independent. In Fourier space, mage structure dominates the lower spatial frequencies (in the Fourier domain), while noise dominates at the higher frequencies.
+## Usage
 
-In Fourier space, there are rings of constant spatial frequency around the origin. By calculating the correlation between the rings in the two images (varying the spatial frequency), you can compute an FRC curve (y-axis: correlation, x-axis: spatial frequency).
-
-At some spatial frequency, the signal cannot be separated from the noise. What spatial frequency exactly depends on what threshold function is used. The standard 0.143 and 1/2-bit thresholds are both available, as well as an algorithm to compute the intersection and resulting resolution.
-
-For additional information about Fourier Ring Correlation, see [R.P.J. Nieuwenhuizen et al. (2013)](https://doi.org/10.1038/nmeth.2448).
-
-#### 1FRC
-
-FRC requires two noise-independent images to work. However, modern cameras are often shot noise-limited (Poisson noise). This library includes a new method due to Bernd Rieger and Sjoerd Stallinga (Department of Imaging Physics, TU Delft), called 1FRC, which uses a technique called binomial splitting to derive two images from a single one, where the pixel counts of the derived images are independently Poisson noise distributed.
-
-This library was produced for my bachelor thesis in 2022 (which focused on 1FRC) and was supervised by Bernd Rieger. [The bachelor thesis can be found here](http://resolver.tudelft.nl/uuid:abdc31f6-6ecd-4c1b-a0c4-53711829467a). Bernd Rieger and Sjoerd Stallinga continued research, leading to a peer reviewed paper published in 2024 in Optics Express, [which can be found here](https://doi.org/10.1364/OE.524683). Their paper includes many details on the limitations of 1FRC and when exactly it is appropriate. I repeat the abstract below:
-
-> We address resolution assessment for (light super-resolution) microscopy imaging. In modalities where imaging is not diffraction limited, correlation between two noise independent images is the standard way to infer the resolution. Here we take away the need for two noise independent images by computationally splitting one image acquisition into two noise independent realizations. This procedure generates two Poisson noise distributed images if the input is Poissonian distributed. As most modern cameras are shot-noise limited this procedure is directly applicable. However, also in the presence of readout noise we can compute the resolution faithfully via a correction factor. We evaluate our method on simulations and experimental data of widefield microscopy, STED microscopy, rescan confocal microscopy, image scanning microscopy, conventional confocal microscopy, and transmission electron microscopy. In all situations we find that using one image instead of two results in the same computed image resolution.
-
-### Installation
-
-You can download this library from PyPI:
-
-```shell
-pip install frc
-```
-
-frc depends on [NumPy](https://numpy.org/) and [frc-core](https://pypi.org/project/frc-core/), its Rust extension, of the same version. frc-core has no dependencies, and one wheel per platform covers every CPython from 3.11 on, so frc runs on every Python that NumPy supports.
-
-### Usage
-
-The code snippet below (which for illustration purposes assumes you have a NumPy array representing your input, its associated scale and also matplotlib to plot the result) will calculate the FRC curve and the associated resolution using the standard 1/7 threshold.
+Pass `one_frc` a square image of photon counts, after offset and gain correction and before any other processing. Then pass the curve to `frc_res`:
 
 ```python
-import frc
 import numpy as np
-import matplotlib.pyplot as plt
+import frc
 
-... # get an image and scale
-
-img = np.array(img)
-img = frc.util.square_image(img, add_padding=False)
-img = frc.util.apply_tukey(img)
-# Apply 1FRC technique
-frc_curve = frc.one_frc(img)
-
-img_size = img.shape[0]
-xs_pix = np.arange(len(frc_curve)) / img_size
-# scale has units [pixels <length unit>^-1] corresponding to original image
-xs_nm_freq = xs_pix * scale
-frc_res, res_y, thres = frc.frc_res(xs_nm_freq, frc_curve, img_size)
-plt.plot(xs_nm_freq, thres(xs_nm_freq))
-plt.plot(xs_nm_freq, frc_curve)
-plt.show()
+counts = frc.util.square_image(counts, add_padding=False)
+curve = frc.one_frc(counts, tukey_alpha=0.125, rings="nearest")
+n = counts.shape[0]
+xs = np.arange(len(curve)) / n  # the frequency of each ring, in cycles per pixel
+resolution, _, _ = frc.frc_res(xs, curve, n, rings="nearest", crossing="first")  # in pixels
 ```
 
-#### Troubleshooting
+- `one_frc(img, method=1, seed=None, tukey_alpha=None, rings="floor")` splits every count of `img` binomially in two, multiplies both halves by a Tukey window with alpha `tukey_alpha`, and returns their FRC curve. Method 2 splits the image twice, independently. The same image and `seed` give the same curve.
+- `two_frc(img1, img2, rings="floor")` returns the FRC curve of two images. Multiply both by `frc.util.tukey_square(n)` first.
+- `frc_res(xs, frc_curve, img_size, threshold=None, rings="floor", crossing="band")` returns the resolution, the value of the threshold where the curve crosses it, and the threshold as a function. `xs` holds the frequency of each ring in any unit, and the resolution comes out in the reciprocal unit. `threshold` is `"1/7"`, the default, `"half_bit"`, or a function of the frequency. Pass the rings that the curve was computed with. `crossing="first"` interpolates the first point at which the curve drops below the threshold.
+- `frc.util` holds `apply_tukey`, `tukey_square`, `tukey_window`, `square_image`, `gaussf` and `intersection`.
 
-If you cannot find an intersection (`NoIntersectionException`), be sure to plot the curve without using the `frc_res` method and see if there even is an intersection. For example:
+`frc_res` raises `frc.NoIntersectionException` if the curve does not cross its threshold. Plot `curve` against `xs` to see why.
+
+## Defaults that keep the results of frc 0.1 and 0.2
+
+frc 0.1 and 0.2 split the image that you had windowed, and summed each ring r over the frequencies with r <= |f| < r + 1. Both lower the FRC and make the resolution coarser, by about 1% each in a simulation. `frc_res` took the mean frequency of a band of rings around the threshold, which often reaches past the first crossing and gave resolutions a few percent finer. The [repository's README](https://github.com/tiptenbrink/frc#choices-that-change-the-resolution) describes the measurement.
+
+To keep earlier results, frc's defaults are those of 0.1 and 0.2:
+
+- Without a `tukey_alpha`, `one_frc` applies no window. It warns with a `frc.NotCountsWarning` when it splits an image that holds values that are not whole numbers, such as a windowed image. With a `tukey_alpha`, it refuses such an image.
+- `rings` is `"floor"`. Pass `rings="nearest"` for rings whose frequencies lie around r.
+- `frc_res` searches the band. Pass `crossing="first"` for the interpolated first crossing.
+
+To keep the results of a windowed image without the warning, switch it off:
 
 ```python
-import frc
-import numpy as np
-import matplotlib.pyplot as plt
+import warnings
 
-img = ... # get an image and scale
-
-# Apply 1FRC technique
-frc_curve = frc.one_frc(img)
-img_size = img.shape[0]
-xs_pix = np.arange(len(frc_curve)) / img_size
-# scale has units [pixels <length unit>^-1] corresponding to original image
-xs_nm_freq = xs_pix * scale
-plt.plot(xs_nm_freq, frc_curve)
-plt.show()
+warnings.simplefilter("ignore", frc.NotCountsWarning)
 ```
-
-For images with a significant amount of non-Poisson noise, the 1FRC method has been shown to fail (adjustments are possible).
-
-### Development
-
-frc, frc-core and the crate frc live in one [repository](https://github.com/tiptenbrink/frc), whose README describes how to build and test them.

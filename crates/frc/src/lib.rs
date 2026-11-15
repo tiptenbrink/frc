@@ -1,47 +1,36 @@
-//! An exact binomial split of images of counts, and Fourier ring correlation (FRC) from one image
-//! or two.
-//!
-//! [`binom_split`] replaces every count n with a sample k of binomial(n, 1/2). A Poisson count
-//! with mean λ becomes one with mean λ / 2, and so does n - k, independently of k: one image of
-//! photon counts becomes two independent images of the same scene.
-//!
-//! [`FrcPlan`] computes FRC curves of n x n images: [`FrcPlan::one_frc`] of one image of counts,
-//! split in two as `binom_split` splits it, and [`FrcPlan::two_frc`] of two images. The FRC at ring
-//! r is Re(Σ F1 conj F2) / sqrt(Σ |F1|² Σ |F2|²) over the frequencies f with r <= |f| < r + 1,
-//! where F1 and F2 are the spectra of the two images, for every r < n / 2.
-//!
-//! Both run in parallel on rayon's thread pool: the global one, or the one a call runs in. With
-//! the same input and seed they give the same result, to the last bit, on every CPU and any
-//! number of threads.
-//!
-//! ```
-//! use frc::{FrcPlan, binom_split};
-//!
-//! let n = 64;
-//! let counts: Vec<i32> = (0..n * n).map(|i| 50 + (i % 7) as i32).collect();
-//!
-//! // One image of counts in two halves.
-//! let mut k = counts.clone();
-//! binom_split(&mut k, 7, frc::CpuFeatures::Detected).unwrap();
-//! let rest: Vec<i32> = counts.iter().zip(&k).map(|(n, k)| n - k).collect();
-//!
-//! // A plan is made once for a size and reused for every image of that size.
-//! let mut plan = FrcPlan::new(n);
-//! let curve = plan.one_frc(&counts, 7).unwrap();
-//! assert_eq!(curve.len(), n / 2);
-//!
-//! // The same split by hand gives the same curve.
-//! let as_f32 = |v: &[i32]| v.iter().map(|&c| c as f32).collect::<Vec<_>>();
-//! assert_eq!(plan.two_frc(&as_f32(&k), &as_f32(&rest)), curve);
-//! ```
-//!
-//! The Python package `frc-core` wraps this crate, and `frc` builds a NumPy API on that.
-
+// The README links its items to docs.rs. These definitions come first, so rustdoc links the same
+// names to the items themselves and warns when one of them no longer exists.
+//! [`FrcPlan`]: FrcPlan
+//! [`FrcPlan::one_frc`]: FrcPlan::one_frc
+//! [`FrcPlan::two_frc`]: FrcPlan::two_frc
+//! [`FrcPlan::one_frc_ring_sums`]: FrcPlan::one_frc_ring_sums
+//! [`FrcPlan::two_frc_ring_sums`]: FrcPlan::two_frc_ring_sums
+//! [`RingSums`]: RingSums
+//! [`Rings`]: Rings
+//! [`Rings::Nearest`]: Rings::Nearest
+//! [`Rings::Floor`]: Rings::Floor
+//! [`Threshold`]: Threshold
+//! [`first_crossing`]: first_crossing
+//! [`Crossing::resolution`]: Crossing::resolution
+//! [`Window`]: Window
+//! [`ring_counts`]: ring_counts
+//! [`binom_split`]: binom_split
+#![doc = include_str!("../README.md")]
 #![deny(unsafe_code)]
+#![warn(missing_docs)]
+#![warn(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
 mod binomial;
+mod cpu;
 mod frc;
 mod platform;
+mod rings;
+mod threshold;
+mod window;
 
-pub use binomial::{CpuFeatures, NegativeCount, binom_split};
+pub use binomial::{NegativeCount, binom_split};
+pub use cpu::CpuFeatures;
 pub use frc::{FrcPlan, RingSums, ring_counts};
+pub use rings::Rings;
+pub use threshold::{Crossing, Threshold, first_crossing};
+pub use window::Window;

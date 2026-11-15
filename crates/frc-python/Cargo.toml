@@ -18,6 +18,10 @@ frc = { path = "../frc" }
 rand = "0.10"
 rayon = "1.12.0"
 
+# For madvise. pyo3 depends on libc too.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dependencies.pyo3]
 version = "0.30.1"
 # One wheel per platform for CPython 3.11 and later, the first stable ABI with the buffer
