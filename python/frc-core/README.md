@@ -29,7 +29,7 @@ curve = np.asarray(frc_core.one_frc(img, seed=1))
 - `ring_counts(n, rings="nearest")` returns the number of frequencies in each ring of an n x n spectrum, as uint64 values.
 - `FrcPlan(n, rings="nearest")` holds the FFT plan and the working memory for n x n images. `one_frc` and `two_frc` make one on each call. For several images of one size, make one plan and call its `one_frc`, `two_frc` and `resolution` methods.
 
-With `rings="nearest"`, ring r holds the frequencies whose distance |f| from the origin rounds to r. With `rings="floor"`, it holds those with r <= |f| < r + 1, as frc 0.1 and 0.2 did.
+With `rings="nearest"`, ring r holds the frequencies whose distance |f| from the origin rounds to r. With `rings="floor"`, it holds those with r ≤ |f| < r + 1, as frc 0.1 and 0.2 did.
 
 ## Repeatable results
 

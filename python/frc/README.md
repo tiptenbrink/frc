@@ -30,17 +30,17 @@ resolution, _, _ = frc.frc_res(xs, curve, n, rings="nearest", crossing="first") 
 
 `frc_res` raises `frc.NoIntersectionException` if the curve does not cross its threshold. Plot `curve` against `xs` to see why.
 
-## Defaults that keep the results of frc 0.1 and 0.2
+## Defaults that reproduce frc 0.1 and 0.2
 
-frc 0.1 and 0.2 split the image that you had windowed, and summed each ring r over the frequencies with r <= |f| < r + 1. Both lower the FRC and make the resolution coarser, by about 1% each in a simulation. `frc_res` took the mean frequency of a band of rings around the threshold, which often reaches past the first crossing and gave resolutions a few percent finer. The [repository's README](https://github.com/tiptenbrink/frc#choices-that-change-the-resolution) describes the measurement.
+frc 0.1 and 0.2 made three choices that shift the resolution by one to a few percent. So that earlier results can be reproduced, frc still makes these choices by default:
 
-To keep earlier results, frc's defaults are those of 0.1 and 0.2:
+- `one_frc` applies no window unless you pass `tukey_alpha`. In frc 0.1 and 0.2, you windowed the image yourself before the split, which makes the resolution slightly coarser. With `tukey_alpha`, `one_frc` windows both halves after the split.
+- `rings` is `"floor"`, which places ring r about half a ring too low. Pass `rings="nearest"` for rings centred on r.
+- `frc_res` estimates the crossing from a band of rings around the threshold, which often gives a slightly finer resolution. Pass `crossing="first"` to interpolate the first crossing instead.
 
-- Without a `tukey_alpha`, `one_frc` applies no window. It warns with a `frc.NotCountsWarning` when it splits an image that holds values that are not whole numbers, such as a windowed image. With a `tukey_alpha`, it refuses such an image.
-- `rings` is `"floor"`. Pass `rings="nearest"` for rings whose frequencies lie around r.
-- `frc_res` searches the band. Pass `crossing="first"` for the interpolated first crossing.
+The [repository's README](https://github.com/tiptenbrink/frc#differences-from-frc-01-and-02) gives the size of each effect and how it was measured.
 
-To keep the results of a windowed image without the warning, switch it off:
+When `one_frc` splits an image whose values are not whole numbers, such as a windowed image, it warns with a `frc.NotCountsWarning`. With `tukey_alpha`, it refuses such an image. To keep the results of a windowed image without the warning, switch it off:
 
 ```python
 import warnings
